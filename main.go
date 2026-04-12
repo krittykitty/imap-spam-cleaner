@@ -39,7 +39,7 @@ func main() {
 		return
 	}
 
-	ctx := app.Context{
+	appCtx := app.Context{
 		Config:  c,
 		Options: options,
 	}
@@ -57,9 +57,9 @@ func main() {
 		}
 	}
 
-	if ctx.Options.RunNow {
+	if appCtx.Options.RunNow {
 		logx.Info("Running all inboxes once immediately")
-		inbox.RunAllInboxes(ctx)
+		inbox.RunAllInboxes(appCtx)
 		return
 	}
 
@@ -75,5 +75,5 @@ func main() {
 		cancel()
 	}()
 
-	inbox.Schedule(rootCtx, ctx)
+	inbox.Schedule(rootCtx, appCtx)
 }

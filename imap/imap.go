@@ -361,7 +361,10 @@ func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {
 func (i *Imap) SearchNewUIDs(sinceUID imap.UID) ([]imap.UID, error) {
 	startUID := sinceUID + 1
 	if startUID == 0 {
-		// UID overflowed; no new messages possible.
+		// sinceUID was the maximum uint32 value (^uint32(0) = 4294967295).
+		// Adding 1 wraps to 0, which is not a valid IMAP UID (UIDs start at 1).
+		// There can be no messages with a UID strictly greater than the
+		// maximum representable value, so return early.
 		return nil, nil
 	}
 	var uidSet imap.UIDSet

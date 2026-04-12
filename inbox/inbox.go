@@ -71,8 +71,9 @@ func Schedule(ctx context.Context, appCtx app.Context) {
 	}
 
 	if idleCount > 0 {
-		// The context passed by main is cancelled before this returns.
-		// Give workers a brief window to finish in-flight jobs.
+		// Intentionally use context.Background() (not the already-cancelled
+		// parent ctx) so the drain window is not immediately cancelled.
+		// Workers have shutdownDrainTimeout to finish in-flight jobs.
 		drainCtx, cancel := context.WithTimeout(context.Background(), shutdownDrainTimeout)
 		defer cancel()
 		done := make(chan struct{})
@@ -230,11 +231,10 @@ func enqueueUIDs(
 			if isTrustedSender(msg.From, wl) {
 				logx.Debugf("%s UID=%d skipping trusted sender (%s)", tag, msg.UID, msg.From)
 				// Send a synthetic success result so the checkpoint advances.
-				select {
-				case resultCh <- dispatcher.Result{UID: msg.UID, Success: true}:
-				default:
-					logx.Warnf("%s UID=%d result channel full — whitelist advance may be delayed", tag, msg.UID)
-				}
+				// The channel is buffered; use a blocking send to guarantee
+				// delivery — dropping this result would cause the UID to be
+				// reprocessed on the next run.
+				resultCh <- dispatcher.Result{UID: msg.UID, Success: true}
 				continue
 			}
 		}

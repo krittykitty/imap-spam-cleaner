@@ -184,7 +184,11 @@ func (d *Dispatcher) processJob(ctx context.Context, providerName string, p prov
 			maxRetries = 3
 		}
 		if job.Retries < maxRetries {
-			backoff := retryBaseBackoff * (1 << job.Retries)
+			shift := job.Retries
+			if shift > 30 {
+				shift = 30
+			}
+			backoff := retryBaseBackoff * (1 << shift)
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
