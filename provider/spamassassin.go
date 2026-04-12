@@ -68,6 +68,13 @@ func (p *SpamAssassin) Init(config map[string]string) error {
 	return nil
 }
 
+func (p *SpamAssassin) HealthCheck(config map[string]string) error {
+	if err := p.Init(config); err != nil {
+		return err
+	}
+	return checkTCP(p.addr, p.timeout)
+}
+
 func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	// Prefer sending the original raw message if available.
 	var rawBytes []byte

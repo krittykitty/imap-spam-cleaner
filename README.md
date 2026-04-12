@@ -19,6 +19,8 @@ Check the [Documentation](https://dominicgisler.github.io/imap-spam-cleaner) for
 This application loads mails from configured imap inboxes and checks their contents using the defined provider.
 Depending on a spam score, the message can be moved to the spam folder, keeping your inbox clean.
 
+The latest version extracts relevant headers and sends separate text and HTML body blocks to AI providers for more reliable analysis.
+
 ## Example
 
 ```console

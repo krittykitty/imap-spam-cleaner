@@ -57,9 +57,13 @@ func Schedule(ctx context.Context, appCtx app.Context) {
 				logx.Errorf("Could not schedule inbox %s (%s): %v", inbox.Username, inbox.Schedule, err)
 			}
 		}
+		jobs++
 	}
 
+	logx.Debugf("Scheduled %d inbox jobs", jobs)
+	logx.Debugf("Starting scheduler")
 	s.Start()
+	logx.Debugf("Scheduler started")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -361,11 +365,19 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	var im *imap.Imap
 
 	logx.Infof("Handling %s", inboxCfg.Username)
+	logx.Debugf("Run triggered at %s for %s (host=%s inbox=%s)", time.Now().UTC().Format(time.RFC3339), inboxCfg.Username, inboxCfg.Host, inboxCfg.Inbox)
 
 	cp, err := checkpoint.Load(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
 	if err != nil {
 		logx.Errorf("Could not load checkpoint: %v\n", err)
 		return
+	}
+	if cp == nil {
+		logx.Debugf("No existing checkpoint found for %s", inboxCfg.Username)
+		logx.Debugf("Checking mailbox %s (%s) with no checkpoint", inboxCfg.Username, inboxCfg.Inbox)
+	} else {
+		logx.Debugf("Loaded checkpoint for %s: UIDValidity=%d LastUID=%d", inboxCfg.Username, cp.UIDValidity, cp.LastUID)
+		logx.Debugf("Checking mailbox %s (%s) since UID %d", inboxCfg.Username, inboxCfg.Inbox, cp.LastUID)
 	}
 
 	if im, err = imap.New(inboxCfg); err != nil {
@@ -420,6 +432,17 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		return
 	}
 	logx.Infof("Loaded %d new messages since UID %d", len(msgs), sinceUID)
+	if len(msgs) == 0 {
+		logx.Debugf("Mailbox %s (%s) check complete; no new UID found", inboxCfg.Username, inboxCfg.Inbox)
+	} else {
+		newestUID := cp.LastUID
+		for _, m := range msgs {
+			if m.UID > newestUID {
+				newestUID = m.UID
+			}
+		}
+		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, newestUID)
+	}
 
 	p, err = provider.New(prov.Type)
 	if err != nil {
@@ -450,9 +473,9 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 
 		n, err := p.Analyze(m)
 		if err != nil {
-			logx.Errorf("Could not analyze message (%s): %v\n", m.Subject, err)
-			// Do not advance checkpoint — retry on next run.
-			continue
+			logx.Errorf("Could not analyze message #%d (%s): %v\n", m.UID, m.Subject, err)
+			logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+			break
 		}
 		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, n)
 
@@ -461,9 +484,9 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
 				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {
-					logx.Errorf("Could not move message (%s): %v\n", m.Subject, err)
-					// Do not advance checkpoint — retry on next run.
-					continue
+					logx.Errorf("Could not move message #%d (%s): %v\n", m.UID, m.Subject, err)
+					logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+					break
 				}
 				moved++
 			}
@@ -475,6 +498,8 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			LastUID:     uint32(m.UID),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
+			logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+			break
 		}
 	}
 	logx.Infof("Moved %d messages", moved)

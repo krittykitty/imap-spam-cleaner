@@ -51,6 +51,13 @@ func (p *Gemini) Init(config map[string]string) error {
 	return nil
 }
 
+func (p *Gemini) HealthCheck(config map[string]string) error {
+	if err := p.Init(config); err != nil {
+		return err
+	}
+	return checkTCP("generativeai.googleapis.com:443", 5*time.Second)
+}
+
 func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 
 	userContent, err := p.buildUserPrompt(msg)

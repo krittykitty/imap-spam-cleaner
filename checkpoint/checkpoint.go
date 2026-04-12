@@ -30,8 +30,10 @@ func filePath(host, username, inbox string) string {
 // Load returns the stored checkpoint for the given mailbox, or nil if none exists yet.
 func Load(host, username, inbox string) (*Checkpoint, error) {
 	path := filePath(host, username, inbox)
+	logx.Debugf("Loading checkpoint from %s", path)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		logx.Debugf("Checkpoint file does not exist: %s", path)
 		return nil, nil
 	}
 	if err != nil {
@@ -41,6 +43,7 @@ func Load(host, username, inbox string) (*Checkpoint, error) {
 	if err = json.Unmarshal(data, &cp); err != nil {
 		return nil, fmt.Errorf("failed to parse checkpoint: %w", err)
 	}
+	logx.Debugf("Loaded checkpoint from %s: UIDValidity=%d LastUID=%d", path, cp.UIDValidity, cp.LastUID)
 	return &cp, nil
 }
 
