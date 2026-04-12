@@ -84,8 +84,10 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	}
 	if cp == nil {
 		logx.Debugf("No existing checkpoint found for %s", inboxCfg.Username)
+		logx.Debugf("Checking mailbox %s (%s) with no checkpoint", inboxCfg.Username, inboxCfg.Inbox)
 	} else {
 		logx.Debugf("Loaded checkpoint for %s: UIDValidity=%d LastUID=%d", inboxCfg.Username, cp.UIDValidity, cp.LastUID)
+		logx.Debugf("Checking mailbox %s (%s) since UID %d", inboxCfg.Username, inboxCfg.Inbox, cp.LastUID)
 	}
 
 	if im, err = imap.New(inboxCfg); err != nil {
@@ -140,6 +142,17 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		return
 	}
 	logx.Infof("Loaded %d new messages since UID %d", len(msgs), sinceUID)
+	if len(msgs) == 0 {
+		logx.Debugf("Mailbox %s (%s) check complete; no new UID found", inboxCfg.Username, inboxCfg.Inbox)
+	} else {
+		newestUID := cp.LastUID
+		for _, m := range msgs {
+			if m.UID > newestUID {
+				newestUID = m.UID
+			}
+		}
+		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, newestUID)
+	}
 
 	p, err = provider.New(prov.Type)
 	if err != nil {
