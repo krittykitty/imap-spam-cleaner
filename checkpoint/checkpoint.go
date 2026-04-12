@@ -123,4 +123,3 @@ func (m *Manager) Complete(uid uint32) error {
 		LastUID:     m.lastUID,
 	})
 }
-

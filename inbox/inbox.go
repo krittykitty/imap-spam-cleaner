@@ -123,6 +123,7 @@ func runIdleInbox(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, p
 
 	// resultCh receives analysis outcomes from dispatcher workers.
 	resultCh := make(chan dispatcher.Result, 64)
+	pending := make(map[uint32]struct{})
 
 	idleTimeout := inboxCfg.IdleTimeout
 	if idleTimeout <= 0 {
@@ -157,12 +158,12 @@ func runIdleInbox(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, p
 	for {
 		if ctx.Err() != nil {
 			// Drain any pending results before exiting.
-			drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag)
+			drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag, pending)
 			return
 		}
 
 		// Drain any completed results before checking for new UIDs.
-		drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag)
+		drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag, pending)
 
 		// Search for new UIDs since the last checkpoint.
 		newUIDs, err := im.SearchNewUIDs(goimap.UID(mgr.LastUID()))
@@ -179,23 +180,42 @@ func runIdleInbox(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, p
 
 		if len(newUIDs) > 0 {
 			logx.Infof("%s found %d new UID(s) since UID %d", tag, len(newUIDs), mgr.LastUID())
-			enqueueUIDs(im, newUIDs, inboxCfg, prov, disp, resultCh, appCtx, tag)
+			enqueueUIDs(im, newUIDs, inboxCfg, prov, disp, resultCh, appCtx, tag, pending)
 		}
 
-		// Block in IDLE until new mail, timeout, or shutdown.
-		idleErr := im.IdleUntilNew(ctx, idleTimeout)
-		if idleErr != nil {
-			if errors.Is(idleErr, context.Canceled) || errors.Is(idleErr, context.DeadlineExceeded) {
-				// Graceful shutdown requested.
-				drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag)
-				return
+		idleCtx, cancel := context.WithCancel(ctx)
+		idleErrCh := make(chan error, 1)
+		go func() {
+			idleErrCh <- im.IdleUntilNew(idleCtx, idleTimeout)
+		}()
+
+		select {
+		case res := <-resultCh:
+			cancel()
+			if _, ok := pending[uint32(res.UID)]; ok {
+				delete(pending, uint32(res.UID))
 			}
-			logx.Errorf("%s IDLE error: %v — reconnecting", tag, idleErr)
+			if err := <-idleErrCh; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logx.Errorf("%s IDLE stop error: %v", tag, err)
+			}
+			handleResult(res, mgr, inboxCfg, im, appCtx, tag)
+		case err := <-idleErrCh:
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			logx.Errorf("%s IDLE error: %v — reconnecting", tag, err)
 			im.Close()
 			im, reconnectBackoff = reconnect(ctx, inboxCfg, reconnectBackoff, tag)
 			if im == nil {
 				return
 			}
+		case <-ctx.Done():
+			cancel()
+			if err := <-idleErrCh; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logx.Errorf("%s IDLE stop error: %v", tag, err)
+			}
+			drainResults(mgr, resultCh, inboxCfg, im, appCtx, tag, pending)
+			return
 		}
 	}
 }
@@ -210,6 +230,7 @@ func enqueueUIDs(
 	resultCh chan dispatcher.Result,
 	appCtx app.Context,
 	tag string,
+	pending map[uint32]struct{},
 ) {
 	if len(uids) == 0 {
 		return
@@ -227,6 +248,9 @@ func enqueueUIDs(
 	}
 
 	for _, msg := range msgs {
+		if _, ok := pending[uint32(msg.UID)]; ok {
+			continue
+		}
 		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
 			if isTrustedSender(msg.From, wl) {
 				logx.Debugf("%s UID=%d skipping trusted sender (%s)", tag, msg.UID, msg.From)
@@ -234,6 +258,7 @@ func enqueueUIDs(
 				// The channel is buffered; use a blocking send to guarantee
 				// delivery — dropping this result would cause the UID to be
 				// reprocessed on the next run.
+				pending[uint32(msg.UID)] = struct{}{}
 				resultCh <- dispatcher.Result{UID: msg.UID, Success: true}
 				continue
 			}
@@ -247,6 +272,7 @@ func enqueueUIDs(
 			EnqueuedAt:   time.Now(),
 			ResultCh:     resultCh,
 		}
+		pending[uint32(msg.UID)] = struct{}{}
 		logx.Debugf("%s UID=%d submitting to dispatcher (provider=%s)", tag, msg.UID, inboxCfg.Provider)
 		disp.Submit(job)
 	}
@@ -260,10 +286,14 @@ func drainResults(
 	im *imap.Imap,
 	appCtx app.Context,
 	tag string,
+	pending map[uint32]struct{},
 ) {
 	for {
 		select {
 		case res := <-resultCh:
+			if _, ok := pending[uint32(res.UID)]; ok {
+				delete(pending, uint32(res.UID))
+			}
 			handleResult(res, mgr, inboxCfg, im, appCtx, tag)
 		default:
 			return
