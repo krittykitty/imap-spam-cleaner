@@ -32,6 +32,12 @@ providers:
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Email body:
-        {{.Body}}
+        Headers:
+        {{.Headers}}
+
+        Text body:
+        {{.TextBody}}
+
+        HTML body:
+        {{.HtmlBody}}
 ```
