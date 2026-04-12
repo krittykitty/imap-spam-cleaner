@@ -75,20 +75,15 @@ func (p *Ollama) Analyze(msg imap.Message) (int, error) {
 	}
 
 	b := false
-	req := api.ChatRequest{
-		Model: p.model,
-		Messages: []api.Message{
-			{
-				Role:    "system",
-				Content: prompt,
-			},
-		},
+	req := api.GenerateRequest{
+		Model:  p.model,
+		Prompt: prompt,
 		Stream: &b,
 	}
 
 	var resp string
-	if err = p.client.Chat(context.Background(), &req, func(response api.ChatResponse) error {
-		resp = response.Message.Content
+	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
+		resp = response.Response
 		return nil
 	}); err != nil {
 		return 0, err
