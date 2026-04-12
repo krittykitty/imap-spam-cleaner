@@ -33,5 +33,24 @@ providers:
       # temperature: 0.2
       # top_p: 0.95
       # max_tokens: 512
+      prompt: |
+        Analyze the following email for its spam potential.
+        Return a spam score between 0 and 100. Only answer with the number itself.
+
+        From: {{.From}}
+        To: {{.To}}
+        Delivered-To: {{.DeliveredTo}}
+        Cc: {{.Cc}}
+        Bcc: {{.Bcc}}
+        Subject: {{.Subject}}
+
+        Headers:
+        {{.Headers}}
+
+        Text body:
+        {{.TextBody}}
+
+        HTML body:
+        {{.HtmlBody}}
 ```
 
