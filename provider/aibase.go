@@ -163,6 +163,12 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Headers     string
 		TextBody    string
 		HtmlBody    string
+		Body        string
+	}
+
+	body := htmlBody
+	if body == "" {
+		body = textBody
 	}
 
 	var buf bytes.Buffer
@@ -176,6 +182,7 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Headers:     msg.Headers,
 		TextBody:    textBody,
 		HtmlBody:    htmlBody,
+		Body:        body,
 	}); err != nil {
 		return "", errors.New("user_prompt template error: " + err.Error())
 	}
