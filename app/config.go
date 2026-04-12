@@ -29,20 +29,24 @@ type Provider struct {
 	Config map[string]string `yaml:"config" validate:"required"`
 }
 
+const DefaultIdleTimeout = 25 * time.Minute
+
 type Inbox struct {
-	Schedule  string        `yaml:"schedule"  validate:"required"`
-	Host      string        `yaml:"host"      validate:"required"`
-	Port      int           `yaml:"port"      validate:"required"`
-	TLS       bool          `yaml:"tls"       validate:"omitempty"`
-	Username  string        `yaml:"username"  validate:"required"`
-	Password  string        `yaml:"password"  validate:"required"`
-	Provider  string        `yaml:"provider"  validate:"required"`
-	Inbox     string        `yaml:"inbox"     validate:"required"`
-	Spam      string        `yaml:"spam"      validate:"required"`
-	MinScore  int           `yaml:"minscore"  validate:"required,gte=0,lte=100"`
-	MinAge    time.Duration `yaml:"minage"    validate:"omitempty"`
-	MaxAge    time.Duration `yaml:"maxage"    validate:"omitempty"`
-	Whitelist string        `yaml:"whitelist" validate:"omitempty"`
+	Schedule    string        `yaml:"schedule"     validate:"required_without=EnableIdle"`
+	Host        string        `yaml:"host"         validate:"required"`
+	Port        int           `yaml:"port"         validate:"required"`
+	TLS         bool          `yaml:"tls"          validate:"omitempty"`
+	Username    string        `yaml:"username"     validate:"required"`
+	Password    string        `yaml:"password"     validate:"required"`
+	Provider    string        `yaml:"provider"     validate:"required"`
+	Inbox       string        `yaml:"inbox"        validate:"required"`
+	Spam        string        `yaml:"spam"         validate:"required"`
+	MinScore    int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
+	MinAge      time.Duration `yaml:"minage"       validate:"omitempty"`
+	MaxAge      time.Duration `yaml:"maxage"       validate:"omitempty"`
+	Whitelist   string        `yaml:"whitelist"    validate:"omitempty"`
+	EnableIdle  bool          `yaml:"enable_idle"  validate:"omitempty"`
+	IdleTimeout time.Duration `yaml:"idle_timeout" validate:"omitempty"`
 }
 
 func LoadConfig() (*Config, error) {

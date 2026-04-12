@@ -80,3 +80,5 @@ inboxes:                          # inboxes to be checked
     minage: 0h                    # min age of message
     maxage: 24h                   # max age of message
     whitelist: whitelist1         # whitelist to use, empty/missing = no whitelist
+    # enable_idle: false          # set to true to use IMAP IDLE instead of the cron schedule above
+    # idle_timeout: 25m           # re-issue IDLE after this duration (RFC 2177 compliance, default 25m)
