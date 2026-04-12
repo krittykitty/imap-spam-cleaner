@@ -62,7 +62,7 @@ func (p *Gemini) HealthCheck(config map[string]string) error {
 
 func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 
-	prompt, err := p.buildPrompt(msg)
+	prompt, err := p.AIBase.buildPrompt(msg)
 	if err != nil {
 		return 0, err
 	}
