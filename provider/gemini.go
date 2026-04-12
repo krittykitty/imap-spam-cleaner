@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 

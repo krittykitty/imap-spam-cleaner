@@ -25,6 +25,8 @@ const (
 	shutdownDrainTimeout = 30 * time.Second
 )
 
+var jobs int
+
 // Schedule runs the cron scheduler for non-IDLE inboxes, spawns IDLE
 // goroutines for IDLE-enabled inboxes, and blocks until SIGINT/SIGTERM.
 func Schedule(ctx context.Context, appCtx app.Context) {
@@ -435,13 +437,13 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	if len(msgs) == 0 {
 		logx.Debugf("Mailbox %s (%s) check complete; no new UID found", inboxCfg.Username, inboxCfg.Inbox)
 	} else {
-		newestUID := cp.LastUID
+		newestUID := goimap.UID(cp.LastUID)
 		for _, m := range msgs {
 			if m.UID > newestUID {
 				newestUID = m.UID
 			}
 		}
-		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, newestUID)
+		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, uint32(newestUID))
 	}
 
 	p, err = provider.New(prov.Type)
