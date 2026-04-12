@@ -149,13 +149,13 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	if len(msgs) == 0 {
 		logx.Debugf("Mailbox %s (%s) check complete; no new UID found", inboxCfg.Username, inboxCfg.Inbox)
 	} else {
-		newestUID := cp.LastUID
+		newestUID := goimap.UID(cp.LastUID)
 		for _, m := range msgs {
 			if uint32(m.UID) > newestUID {
 				newestUID = uint32(m.UID)
 			}
 		}
-		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, newestUID)
+		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, uint32(newestUID))
 	}
 
 	p, err = provider.New(prov.Type)
