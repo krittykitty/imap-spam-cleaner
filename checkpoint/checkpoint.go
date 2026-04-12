@@ -105,6 +105,19 @@ func (m *Manager) LastUID() uint32 {
 	return m.lastUID
 }
 
+// IsAlreadyProcessed returns true if uid has either already been persisted as
+// completed, or if it has already completed out-of-order and is waiting for
+// earlier UIDs to advance the checkpoint.
+func (m *Manager) IsAlreadyProcessed(uid uint32) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if uid <= m.lastUID {
+		return true
+	}
+	_, ok := m.completed[uid]
+	return ok
+}
+
 // Complete marks uid as successfully processed, advances the checkpoint as far
 // as possible, and persists it.  It is safe to call from multiple goroutines.
 func (m *Manager) Complete(uid uint32) error {

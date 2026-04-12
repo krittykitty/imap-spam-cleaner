@@ -186,7 +186,7 @@ func runIdleInbox(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, p
 
 		if len(newUIDs) > 0 {
 			logx.Infof("%s found %d new UID(s) since UID %d", tag, len(newUIDs), mgr.LastUID())
-			enqueueUIDs(im, newUIDs, inboxCfg, prov, disp, resultCh, appCtx, tag, pending)
+			enqueueUIDs(im, newUIDs, inboxCfg, prov, disp, resultCh, appCtx, tag, mgr, pending)
 		}
 
 		idleCtx, cancel := context.WithCancel(ctx)
@@ -236,6 +236,7 @@ func enqueueUIDs(
 	resultCh chan dispatcher.Result,
 	appCtx app.Context,
 	tag string,
+	mgr *checkpoint.Manager,
 	pending map[uint32]struct{},
 ) {
 	if len(uids) == 0 {
@@ -244,7 +245,17 @@ func enqueueUIDs(
 
 	var uidSet goimap.UIDSet
 	for _, uid := range uids {
+		n := uint32(uid)
+		if _, ok := pending[n]; ok {
+			continue
+		}
+		if mgr.IsAlreadyProcessed(n) {
+			continue
+		}
 		uidSet.AddNum(uid)
+	}
+	if len(uidSet) == 0 {
+		return
 	}
 
 	msgs, err := im.LoadMessagesByUID(uidSet)
@@ -254,7 +265,11 @@ func enqueueUIDs(
 	}
 
 	for _, msg := range msgs {
-		if _, ok := pending[uint32(msg.UID)]; ok {
+		n := uint32(msg.UID)
+		if _, ok := pending[n]; ok {
+			continue
+		}
+		if mgr.IsAlreadyProcessed(n) {
 			continue
 		}
 		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
