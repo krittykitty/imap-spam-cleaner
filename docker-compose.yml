@@ -1,13 +1,13 @@
 services:
   imap-spam-cleaner:
-    image: dominicgisler/imap-spam-cleaner:latest
+    # Build the image using the Dockerfile in the current directory
+    build: .
     container_name: imap-spam-cleaner
     hostname: imap-spam-cleaner
     restart: always
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./checkpoints:/app/checkpoints
-
 # SpamAssassin is an optional service
 #  spamassassin:
 #    image: axllent/spamassassin

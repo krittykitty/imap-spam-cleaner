@@ -20,6 +20,51 @@ type Checkpoint struct {
 	LastUID     uint32 `json:"last_uid"`
 }
 
+type Manager struct {
+	host      string
+	username  string
+	inbox     string
+	baseline  uint32
+	completed map[uint32]struct{}
+}
+
+func NewManager(host, username, inbox string, cp *Checkpoint) *Manager {
+	baseline := uint32(0)
+	if cp != nil {
+		baseline = cp.LastUID
+	}
+	return &Manager{
+		host:      host,
+		username:  username,
+		inbox:     inbox,
+		baseline:  baseline,
+		completed: make(map[uint32]struct{}),
+	}
+}
+
+func (m *Manager) IsAlreadyProcessed(uid uint32) bool {
+	if uid <= m.baseline {
+		return true
+	}
+	_, ok := m.completed[uid]
+	return ok
+}
+
+func (m *Manager) Complete(uid uint32) error {
+	m.completed[uid] = struct{}{}
+	return nil
+}
+
+func (m *Manager) LastUID() uint32 {
+	maxUID := m.baseline
+	for uid := range m.completed {
+		if uid > maxUID {
+			maxUID = uid
+		}
+	}
+	return maxUID
+}
+
 func filePath(host, username, inbox string) string {
 	sanitize := func(s string) string {
 		return nonAlphanumeric.ReplaceAllString(s, "_")
