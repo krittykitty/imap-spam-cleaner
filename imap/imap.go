@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"sort"
 	"strings"
 	"time"
 
@@ -191,6 +192,11 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 			Headers:     extractRelevantHeaders(b),
 		}
 
+		if msg.UID <= sinceUID {
+			logx.Debugf("Skipping message because UID is not newer than sinceUID (msg.UID=%d sinceUID=%d)", msg.UID, sinceUID)
+			continue
+		}
+
 		if message.Date, err = mr.Header.Date(); err != nil {
 			logx.Debugf("failed to parse Date header, falling back to INTERNALDATE (msg.UID=%d): %v", msg.UID, err)
 			message.Date = msg.InternalDate
@@ -240,7 +246,21 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		messages = append(messages, message)
 	}
 
-	return messages, nil
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].UID < messages[j].UID
+	})
+
+	filtered := make([]Message, 0, len(messages))
+	seen := make(map[uint32]struct{}, len(messages))
+	for _, message := range messages {
+		if _, ok := seen[uint32(message.UID)]; ok {
+			continue
+		}
+		seen[uint32(message.UID)] = struct{}{}
+		filtered = append(filtered, message)
+	}
+
+	return filtered, nil
 }
 
 func extractRelevantHeaders(raw []byte) string {

@@ -90,6 +90,8 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Checking mailbox %s (%s) since UID %d", inboxCfg.Username, inboxCfg.Inbox, cp.LastUID)
 	}
 
+	mgr := checkpoint.NewManager(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox, cp)
+
 	if im, err = imap.New(inboxCfg); err != nil {
 		logx.Errorf("Could not load imap: %v\n", err)
 		return
@@ -146,12 +148,15 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Mailbox %s (%s) check complete; no new UID found", inboxCfg.Username, inboxCfg.Inbox)
 	} else {
 		newestUID := goimap.UID(cp.LastUID)
+		loadedUIDs := make([]uint32, 0, len(msgs))
 		for _, m := range msgs {
+			loadedUIDs = append(loadedUIDs, uint32(m.UID))
 			if m.UID > newestUID {
 				newestUID = m.UID
 			}
 		}
 		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, uint32(newestUID))
+		logx.Debugf("Loaded message UIDs for processing: %v", loadedUIDs)
 	}
 
 	p, err = provider.New(prov.Type)
@@ -166,7 +171,15 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	}
 
 	moved := 0
+	processedUIDs := make([]uint32, 0, len(msgs))
+	skippedUIDs := make([]uint32, 0, len(msgs))
 	for _, m := range msgs {
+		if mgr.IsAlreadyProcessed(uint32(m.UID)) {
+			logx.Debugf("Skipping already processed message #%d (%s)", m.UID, m.Subject)
+			skippedUIDs = append(skippedUIDs, uint32(m.UID))
+			continue
+		}
+
 		if wl, ok := ctx.Config.Whitelists[inboxCfg.Whitelist]; ok {
 			trustedSender := false
 			for _, rgx := range wl {
@@ -177,13 +190,16 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			}
 			if trustedSender {
 				logx.Debugf("Skipping message #%d (%s) because of trusted sender (%s)", m.UID, m.Subject, m.From)
-				// Advance checkpoint for skipped (trusted) messages.
+				if err = mgr.Complete(uint32(m.UID)); err != nil {
+					logx.Errorf("Could not mark message #%d as completed: %v", m.UID, err)
+				}
 				if err = checkpoint.Save(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox, &checkpoint.Checkpoint{
 					UIDValidity: currentUIDValidity,
-					LastUID:     uint32(m.UID),
+					LastUID:     mgr.LastUID(),
 				}); err != nil {
 					logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
 				}
+				skippedUIDs = append(skippedUIDs, uint32(m.UID))
 				continue
 			}
 		}
@@ -209,15 +225,24 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			}
 		}
 
-		// Advance checkpoint only after the message was fully and successfully processed.
+		if err = mgr.Complete(uint32(m.UID)); err != nil {
+			logx.Errorf("Could not mark message #%d as completed: %v", m.UID, err)
+		}
 		if err = checkpoint.Save(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox, &checkpoint.Checkpoint{
 			UIDValidity: currentUIDValidity,
-			LastUID:     uint32(m.UID),
+			LastUID:     mgr.LastUID(),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
 			logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
 			break
 		}
+		processedUIDs = append(processedUIDs, uint32(m.UID))
 	}
-	logx.Infof("Moved %d messages", moved)
+	if len(processedUIDs) > 0 {
+		logx.Debugf("Processed message UIDs: %v", processedUIDs)
+	}
+	if len(skippedUIDs) > 0 {
+		logx.Debugf("Skipped message UIDs: %v", skippedUIDs)
+	}
+	logx.Infof("Processed %d messages, moved %d messages", len(processedUIDs), moved)
 }
