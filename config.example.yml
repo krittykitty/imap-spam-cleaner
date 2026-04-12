@@ -29,11 +29,8 @@ providers:                        # providers to be used for inboxes
       #   Bcc: {{.Bcc}}
       #   Subject: {{.Subject}}
       #
-      #   Text body:
-      #   {{.TextBody}}
-      #
-      #   HTML body:
-      #   {{.HtmlBody}}
+      #   Email body:
+      #   {{.Body}}
   prov2:                          # provider name
     type: ollama                  # provider type
     concurrency: 1                # max concurrent Analyze calls for this provider (default: 1)

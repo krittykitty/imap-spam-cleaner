@@ -33,8 +33,8 @@ providers:                        # providers to be used for inboxes
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Content:
-        {{.Content}}
+        Email body:
+        {{.Body}}
   prov2:                          # provider name
     type: ollama                  # provider type
     config:                       # provider specific configuration

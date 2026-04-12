@@ -20,6 +20,6 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Content:
-{{.Content}}
+Email body:
+{{.Body}}
 ```

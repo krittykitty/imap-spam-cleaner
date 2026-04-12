@@ -32,6 +32,6 @@ providers:
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Content:
-        {{.Content}}
+        Email body:
+        {{.Body}}
 ```
