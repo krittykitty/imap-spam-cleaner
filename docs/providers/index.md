@@ -13,6 +13,9 @@ The following prompt is used by the AI providers if no custom prompt is specifie
 Analyze the following email for its spam potential.
 Return a spam score between 0 and 100. Only answer with the number itself.
 
+Headers:
+{{.Headers}}
+
 From: {{.From}}
 To: {{.To}}
 Delivered-To: {{.DeliveredTo}}
@@ -20,6 +23,9 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Content:
-{{.Content}}
+Text body:
+{{.TextBody}}
+
+HTML body:
+{{.HtmlBody}}
 ```

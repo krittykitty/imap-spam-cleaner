@@ -3,9 +3,11 @@ package provider
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 	"github.com/ollama/ollama/api"
@@ -46,6 +48,23 @@ func (p *Ollama) Init(config map[string]string) error {
 	}
 	p.client = api.NewClient(p.url, http.DefaultClient)
 	return nil
+}
+
+func (p *Ollama) HealthCheck(config map[string]string) error {
+	if err := p.Init(config); err != nil {
+		return err
+	}
+
+	host := p.url.Hostname()
+	port := p.url.Port()
+	if port == "" {
+		if p.url.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return checkTCP(net.JoinHostPort(host, port), 5*time.Second)
 }
 
 func (p *Ollama) Analyze(msg imap.Message) (int, error) {

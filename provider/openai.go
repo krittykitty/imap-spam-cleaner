@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 	"github.com/sashabaranov/go-openai"
@@ -39,6 +40,13 @@ func (p *OpenAI) Init(config map[string]string) error {
 	}
 	p.client = openai.NewClient(p.apikey)
 	return nil
+}
+
+func (p *OpenAI) HealthCheck(config map[string]string) error {
+	if err := p.Init(config); err != nil {
+		return err
+	}
+	return checkTCP("api.openai.com:443", 5*time.Second)
 }
 
 func (p *OpenAI) Analyze(msg imap.Message) (int, error) {

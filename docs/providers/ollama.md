@@ -32,6 +32,12 @@ providers:
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Content:
-        {{.Content}}
+        Headers:
+        {{.Headers}}
+
+        Text body:
+        {{.TextBody}}
+
+        HTML body:
+        {{.HtmlBody}}
 ```

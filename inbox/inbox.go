@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
 	"github.com/dominicgisler/imap-spam-cleaner/checkpoint"
@@ -22,6 +23,7 @@ func Schedule(ctx app.Context) {
 		return
 	}
 
+	jobs := 0
 	for i, inbox := range ctx.Config.Inboxes {
 		logx.Infof("Scheduling inbox %s (%s)", inbox.Username, inbox.Schedule)
 		prov, ok := ctx.Config.Providers[inbox.Provider]
@@ -34,10 +36,15 @@ func Schedule(ctx app.Context) {
 			gocron.NewTask(processInbox, ctx, inbox, prov),
 		); err != nil {
 			logx.Errorf("Could not schedule inbox %s (%s): %v", inbox.Username, inbox.Schedule, err)
+			continue
 		}
+		jobs++
 	}
 
+	logx.Debugf("Scheduled %d inbox jobs", jobs)
+	logx.Debugf("Starting scheduler")
 	s.Start()
+	logx.Debugf("Scheduler started")
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -68,11 +75,17 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	var im *imap.Imap
 
 	logx.Infof("Handling %s", inboxCfg.Username)
+	logx.Debugf("Run triggered at %s for %s (host=%s inbox=%s)", time.Now().UTC().Format(time.RFC3339), inboxCfg.Username, inboxCfg.Host, inboxCfg.Inbox)
 
 	cp, err := checkpoint.Load(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
 	if err != nil {
 		logx.Errorf("Could not load checkpoint: %v\n", err)
 		return
+	}
+	if cp == nil {
+		logx.Debugf("No existing checkpoint found for %s", inboxCfg.Username)
+	} else {
+		logx.Debugf("Loaded checkpoint for %s: UIDValidity=%d LastUID=%d", inboxCfg.Username, cp.UIDValidity, cp.LastUID)
 	}
 
 	if im, err = imap.New(inboxCfg); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 
@@ -50,6 +51,13 @@ func (p *Gemini) Init(config map[string]string) error {
 	p.client = client
 
 	return nil
+}
+
+func (p *Gemini) HealthCheck(config map[string]string) error {
+	if err := p.Init(config); err != nil {
+		return err
+	}
+	return checkTCP("generativeai.googleapis.com:443", 5*time.Second)
 }
 
 func (p *Gemini) Analyze(msg imap.Message) (int, error) {

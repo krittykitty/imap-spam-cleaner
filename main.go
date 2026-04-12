@@ -52,6 +52,10 @@ func main() {
 			logx.Errorf("Invalid config for provider %s: %v\n", name, err)
 			return
 		}
+		if err = p.HealthCheck(prov.Config); err != nil {
+			logx.Errorf("Provider %s unavailable: %v\n", name, err)
+			return
+		}
 	}
 
 	if ctx.Options.RunNow {
