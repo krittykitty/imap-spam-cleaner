@@ -3,6 +3,7 @@ package imap
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,9 +23,42 @@ type Imap struct {
 	client      *imapclient.Client
 	cfg         app.Inbox
 	uidValidity uint32
+	// newMailCh receives a signal when the server sends an EXISTS update.
+	// Non-nil only when the connection was created via NewForIdle.
+	newMailCh chan struct{}
 }
 
+// New creates a standard IMAP connection. Use NewForIdle when IDLE support is needed.
 func New(cfg app.Inbox) (*Imap, error) {
+	return newWithOptions(cfg, nil)
+}
+
+// NewForIdle creates an IMAP connection wired up to deliver new-mail
+// notifications over the returned channel. Pass that connection to
+// IdleUntilNew to block until new mail (or timeout/cancellation).
+func NewForIdle(cfg app.Inbox) (*Imap, error) {
+	ch := make(chan struct{}, 1)
+	opts := &imapclient.Options{
+		UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+			Mailbox: func(data *imapclient.UnilateralDataMailbox) {
+				if data.NumMessages != nil {
+					select {
+					case ch <- struct{}{}:
+					default:
+					}
+				}
+			},
+		},
+	}
+	im, err := newWithOptions(cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+	im.newMailCh = ch
+	return im, nil
+}
+
+func newWithOptions(cfg app.Inbox, opts *imapclient.Options) (*Imap, error) {
 
 	var err error
 	var mailboxes []*imap.ListData
@@ -34,9 +68,9 @@ func New(cfg app.Inbox) (*Imap, error) {
 	}
 
 	if cfg.TLS {
-		i.client, err = imapclient.DialTLS(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port), nil)
+		i.client, err = imapclient.DialTLS(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port), opts)
 	} else {
-		i.client, err = imapclient.DialInsecure(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port), nil)
+		i.client, err = imapclient.DialInsecure(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port), opts)
 	}
 
 	if err != nil {
@@ -100,12 +134,6 @@ func (i *Imap) Close() {
 
 func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 
-	var err error
-	var msgs []*imapclient.FetchMessageBuffer
-	var mr *mail.Reader
-	var p *mail.Part
-	var messages []Message
-
 	searchCrit := &imap.SearchCriteria{}
 	if i.cfg.MinAge > 0 {
 		searchCrit.Before = time.Now().Add(-i.cfg.MinAge)
@@ -134,6 +162,26 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		return nil, nil
 	}
 
+	return i.fetchAndParse(uidRes.All)
+}
+
+// LoadMessagesByUID fetches and parses messages for the given UID set.
+// Age filters from the inbox configuration are applied.
+func (i *Imap) LoadMessagesByUID(uidSet imap.UIDSet) ([]Message, error) {
+	if len(uidSet) == 0 {
+		return nil, nil
+	}
+	return i.fetchAndParse(uidSet)
+}
+
+// fetchAndParse fetches headers + text for numSet and returns parsed Messages.
+func (i *Imap) fetchAndParse(numSet imap.NumSet) ([]Message, error) {
+
+	var err error
+	var mr *mail.Reader
+	var p *mail.Part
+	var messages []Message
+
 	// Fetch headers and body text only — attachments are intentionally excluded.
 	fetchOptions := &imap.FetchOptions{
 		Envelope:     true,
@@ -151,7 +199,7 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		},
 	}
 
-	msgs, err = i.client.Fetch(uidRes.All, fetchOptions).Collect()
+	msgs, err := i.client.Fetch(numSet, fetchOptions).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch messages: %w", err)
 	}
@@ -306,4 +354,65 @@ func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {
 		return err
 	}
 	return nil
+}
+
+// SearchNewUIDs returns all UIDs strictly greater than sinceUID in the
+// selected mailbox. Only UIDs are fetched — no message bodies.
+func (i *Imap) SearchNewUIDs(sinceUID imap.UID) ([]imap.UID, error) {
+	startUID := sinceUID + 1
+	if startUID == 0 {
+		// UID overflowed; no new messages possible.
+		return nil, nil
+	}
+	var uidSet imap.UIDSet
+	uidSet.AddRange(startUID, 0) // 0 = * (open-ended)
+	crit := &imap.SearchCriteria{
+		UID: []imap.UIDSet{uidSet},
+	}
+	res, err := i.client.UIDSearch(crit, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("could not search UIDs: %w", err)
+	}
+	return res.AllUIDs(), nil
+}
+
+// IdleUntilNew puts the connection into IMAP IDLE mode and blocks until one
+// of the following occurs:
+//   - the server signals a new message (EXISTS response),
+//   - the provided context is cancelled,
+//   - the idleTimeout elapses (caller should re-issue IDLE).
+//
+// The connection must have been created with NewForIdle.
+// A non-nil error is returned only for unexpected connection failures.
+// context.Canceled or context.DeadlineExceeded is returned when ctx is done.
+func (i *Imap) IdleUntilNew(ctx context.Context, idleTimeout time.Duration) error {
+	if i.newMailCh == nil {
+		return fmt.Errorf("IdleUntilNew requires a connection created with NewForIdle")
+	}
+
+	idleCmd, err := i.client.Idle()
+	if err != nil {
+		return fmt.Errorf("could not start IDLE: %w", err)
+	}
+
+	timer := time.NewTimer(idleTimeout)
+	defer timer.Stop()
+
+	var stopErr error
+	select {
+	case <-i.newMailCh:
+		// New mail arrived.
+	case <-timer.C:
+		// Idle timeout — caller will re-issue IDLE.
+	case <-ctx.Done():
+		stopErr = ctx.Err()
+	}
+
+	if err := idleCmd.Close(); err != nil {
+		return fmt.Errorf("could not stop IDLE: %w", err)
+	}
+	if err := idleCmd.Wait(); err != nil && stopErr == nil {
+		return fmt.Errorf("IDLE error: %w", err)
+	}
+	return stopErr
 }
