@@ -23,6 +23,9 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Email body:
-{{.Body}}
+Text body:
+{{.TextBody}}
+
+HTML body:
+{{.HtmlBody}}
 ```
