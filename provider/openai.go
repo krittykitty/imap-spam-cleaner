@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
@@ -91,10 +92,10 @@ func (p *OpenAI) Analyze(msg imap.Message) (int, error) {
 		return 0, errors.New("empty openai response")
 	}
 
-	score, err := parseSpamScore(resp.Choices[0].Message.Content)
+	i, err := strconv.ParseInt(resp.Choices[0].Message.Content, 10, 64)
 	if err != nil {
 		return 0, err
 	}
 
-	return score, nil
+	return int(i), nil
 }
