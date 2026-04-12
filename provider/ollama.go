@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
@@ -89,12 +88,12 @@ func (p *Ollama) Analyze(msg imap.Message) (int, error) {
 		return 0, err
 	}
 
-	i, err := strconv.ParseInt(resp, 10, 64)
+	score, err := parseSpamScore(resp)
 	if err != nil {
 		return 0, err
 	}
 
-	return int(i), nil
+	return score, nil
 }
 
 func checkTCP(addr string, timeout time.Duration) error {
