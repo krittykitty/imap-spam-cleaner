@@ -37,6 +37,7 @@ func Schedule(ctx context.Context, appCtx app.Context) {
 	}
 
 	idleCount := 0
+	jobs := 0
 	for i, inbox := range appCtx.Config.Inboxes {
 		prov, ok := appCtx.Config.Providers[inbox.Provider]
 		if !ok {
@@ -437,8 +438,8 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	} else {
 		newestUID := cp.LastUID
 		for _, m := range msgs {
-			if m.UID > newestUID {
-				newestUID = m.UID
+			if uint32(m.UID) > newestUID {
+				newestUID = uint32(m.UID)
 			}
 		}
 		logx.Debugf("Mailbox %s (%s) newest UID found: %d", inboxCfg.Username, inboxCfg.Inbox, newestUID)
