@@ -177,9 +177,9 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 
 		n, err := p.Analyze(m)
 		if err != nil {
-			logx.Errorf("Could not analyze message (%s): %v\n", m.Subject, err)
-			// Do not advance checkpoint — retry on next run.
-			continue
+			logx.Errorf("Could not analyze message #%d (%s): %v\n", m.UID, m.Subject, err)
+			logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+			break
 		}
 		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, n)
 
@@ -188,9 +188,9 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
 				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {
-					logx.Errorf("Could not move message (%s): %v\n", m.Subject, err)
-					// Do not advance checkpoint — retry on next run.
-					continue
+					logx.Errorf("Could not move message #%d (%s): %v\n", m.UID, m.Subject, err)
+					logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+					break
 				}
 				moved++
 			}
@@ -202,7 +202,10 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			LastUID:     uint32(m.UID),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
+			logx.Infof("Stopping inbox processing at UID %d; will retry from there on next run", m.UID)
+			break
 		}
 	}
 	logx.Infof("Moved %d messages", moved)
 }
+
