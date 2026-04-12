@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
 	"github.com/dominicgisler/imap-spam-cleaner/inbox"
@@ -36,7 +39,7 @@ func main() {
 		return
 	}
 
-	ctx := app.Context{
+	appCtx := app.Context{
 		Config:  c,
 		Options: options,
 	}
@@ -60,11 +63,23 @@ func main() {
 		logx.Debugf("Provider %s (%s) health check passed", name, prov.Type)
 	}
 
-	if ctx.Options.RunNow {
+	if appCtx.Options.RunNow {
 		logx.Info("Running all inboxes once immediately")
-		inbox.RunAllInboxes(ctx)
+		inbox.RunAllInboxes(appCtx)
 		return
 	}
 
-	inbox.Schedule(ctx)
+	// Create a cancellable context so that IDLE goroutines stop cleanly on
+	// receipt of SIGINT/SIGTERM (Schedule also listens for those signals, but
+	// the context lets IDLE loops notice shutdown without depending on Schedule
+	// closing first).
+	rootCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		cancel()
+	}()
+
+	inbox.Schedule(rootCtx, appCtx)
 }

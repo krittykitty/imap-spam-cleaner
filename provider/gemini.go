@@ -3,8 +3,6 @@ package provider
 import (
 	"context"
 	"errors"
-	"strconv"
-	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 
@@ -99,10 +97,10 @@ func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 		return 0, errors.New("empty gemini response")
 	}
 
-	i, err := strconv.ParseInt(resp.Candidates[0].Content.Parts[0].Text, 10, 64)
+	score, err := parseSpamScore(resp.Candidates[0].Content.Parts[0].Text)
 	if err != nil {
 		return 0, err
 	}
 
-	return int(i), nil
+	return score, nil
 }

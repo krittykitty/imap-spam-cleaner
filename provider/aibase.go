@@ -3,6 +3,8 @@ package provider
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -12,11 +14,7 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/mailclean"
 )
 
-// textBodyDivisor controls the plain-text share of the LLM prompt budget when
-// both text and HTML bodies are present: plain-text gets 1/textBodyDivisor of
-// maxsize; the rest goes to the HTML-derived Markdown, reflecting that spam
-// signals tend to be denser in the HTML part.
-const textBodyDivisor = 4
+var scoreRegexp = regexp.MustCompile(`(?m)(?:^|\D)([0-9]{1,3})(?:\D|$)`)
 
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a single integer score.`
 
@@ -34,11 +32,8 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Text body:
-{{.TextBody}}
-
-HTML body (converted to Markdown):
-{{.HtmlBody}}
+Email body:
+{{.Body}}
 `
 
 type AIBase struct {
@@ -128,29 +123,19 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		}
 	}
 
-	// Apply size limits. When both bodies are present, allocate 1/4 of the
-	// budget to plain-text and 3/4 to the HTML-derived Markdown — spam
-	// signals tend to be denser in the HTML part.
+	// If both formats are present, prefer cleaned HTML-only content.
 	if textBody != "" && htmlBody != "" {
-		textLimit := p.maxsize / textBodyDivisor
-		htmlLimit := p.maxsize - textLimit
-		if len(textBody) > textLimit {
-			textBody = textBody[:textLimit]
-			logx.Debugf("truncating text body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-		if len(htmlBody) > htmlLimit {
-			htmlBody = htmlBody[:htmlLimit]
-			logx.Debugf("truncating HTML body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-	} else {
-		if len(textBody) > p.maxsize {
-			textBody = textBody[:p.maxsize]
-			logx.Debugf("truncating text body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-		if len(htmlBody) > p.maxsize {
-			htmlBody = htmlBody[:p.maxsize]
-			logx.Debugf("truncating HTML body for message #%d (%s)", msg.UID, msg.Subject)
-		}
+		textBody = ""
+	}
+
+	body := htmlBody
+	if body == "" {
+		body = textBody
+	}
+
+	if len(body) > p.maxsize {
+		body = body[:p.maxsize]
+		logx.Debugf("truncating email body for message #%d (%s)", msg.UID, msg.Subject)
 	}
 
 	type TplVars struct {
@@ -161,8 +146,7 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Bcc         string
 		Subject     string
 		Headers     string
-		TextBody    string
-		HtmlBody    string
+		Body        string
 	}
 
 	var buf bytes.Buffer
@@ -174,8 +158,7 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Bcc:         msg.Bcc,
 		Subject:     msg.Subject,
 		Headers:     msg.Headers,
-		TextBody:    textBody,
-		HtmlBody:    htmlBody,
+		Body:        body,
 	}); err != nil {
 		return "", errors.New("user_prompt template error: " + err.Error())
 	}
@@ -194,4 +177,20 @@ func (p *AIBase) buildPrompt(msg imap.Message) (string, error) {
 	}
 
 	return p.systemPrompt + "\n\n" + userPrompt, nil
+}
+
+func parseSpamScore(resp string) (int, error) {
+	matches := scoreRegexp.FindStringSubmatch(strings.TrimSpace(resp))
+	if len(matches) < 2 {
+		return 0, errors.New("no integer score found in response")
+	}
+
+	score, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid score: %w", err)
+	}
+	if score < 0 || score > 100 {
+		return 0, fmt.Errorf("score %d out of range", score)
+	}
+	return score, nil
 }
