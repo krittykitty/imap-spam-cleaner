@@ -44,3 +44,25 @@ func TestManagerIsAlreadyProcessed(t *testing.T) {
 	// Clean up generated checkpoint file.
 	os.RemoveAll(filepath.Join("checkpoints"))
 }
+
+func TestTryMarkUIDProcessed(t *testing.T) {
+	os.RemoveAll(filepath.Join("checkpoints"))
+
+	first, err := TryMarkUIDProcessed("host", "user", "INBOX", 25808)
+	if err != nil {
+		t.Fatalf("TryMarkUIDProcessed first call failed: %v", err)
+	}
+	if !first {
+		t.Fatalf("expected first call to mark UID as processed")
+	}
+
+	second, err := TryMarkUIDProcessed("host", "user", "INBOX", 25808)
+	if err != nil {
+		t.Fatalf("TryMarkUIDProcessed second call failed: %v", err)
+	}
+	if second {
+		t.Fatalf("expected second call to detect already processed UID")
+	}
+
+	os.RemoveAll(filepath.Join("checkpoints"))
+}

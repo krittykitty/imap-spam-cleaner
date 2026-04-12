@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 )
@@ -71,6 +72,39 @@ func filePath(host, username, inbox string) string {
 	}
 	name := fmt.Sprintf("%s__%s__%s.json", sanitize(host), sanitize(username), sanitize(inbox))
 	return filepath.Join(dir, name)
+}
+
+func processedDirPath(host, username, inbox string) string {
+	sanitize := func(s string) string {
+		return nonAlphanumeric.ReplaceAllString(s, "_")
+	}
+	name := fmt.Sprintf("%s__%s__%s", sanitize(host), sanitize(username), sanitize(inbox))
+	return filepath.Join(dir, "processed", name)
+}
+
+func processedUIDPath(host, username, inbox string, uid uint32) string {
+	return filepath.Join(processedDirPath(host, username, inbox), strconv.FormatUint(uint64(uid), 10)+".uid")
+}
+
+// TryMarkUIDProcessed marks UID as processed exactly once.
+// It returns true when the UID was newly marked in this call, false when it was already marked before.
+func TryMarkUIDProcessed(host, username, inbox string, uid uint32) (bool, error) {
+	if err := os.MkdirAll(processedDirPath(host, username, inbox), 0755); err != nil {
+		return false, fmt.Errorf("failed to create processed uid directory: %w", err)
+	}
+
+	path := processedUIDPath(host, username, inbox, uid)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if os.IsExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to mark uid as processed: %w", err)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return false, fmt.Errorf("failed to close processed uid marker: %w", cerr)
+	}
+	return true, nil
 }
 
 // Load returns the stored checkpoint for the given mailbox, or nil if none exists yet.
