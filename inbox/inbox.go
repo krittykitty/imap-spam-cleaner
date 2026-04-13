@@ -20,6 +20,8 @@ import (
 	"github.com/go-co-op/gocron/v2"
 )
 
+const initialPopulationWindow = 90 * 24 * time.Hour
+
 func Schedule(ctx app.Context) {
 
 	s, err := gocron.NewScheduler()
@@ -113,26 +115,36 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	defer recentStore.Close()
 
 	// helper to seed from a mailbox (inbox or sent)
-	seedFromMailbox := func(cfg app.Inbox, maxMessages int) ([]string, error) {
+	seedFromMailbox := func(cfg app.Inbox, maxMessages int, useThreeMonthWindow bool) ([]string, error) {
+		cfg.MinAge = 0
+		cfg.MaxAge = 0
+		if useThreeMonthWindow {
+			cfg.MaxAge = initialPopulationWindow
+		}
+
 		im, err := imap.New(cfg)
 		if err != nil {
 			return nil, err
 		}
 		defer im.Close()
 
-		maxUID, err := im.GetMaxUID()
-		if err != nil {
-			return nil, err
-		}
 		var sinceUID goimap.UID
-		if maxUID > goimap.UID(maxMessages) {
-			sinceUID = maxUID - goimap.UID(maxMessages)
-		} else {
-			sinceUID = 0
+		if maxMessages > 0 {
+			maxUID, err := im.GetMaxUID()
+			if err != nil {
+				return nil, err
+			}
+			if maxUID > goimap.UID(maxMessages) {
+				sinceUID = maxUID - goimap.UID(maxMessages)
+			}
 		}
 		msgs, err := im.LoadMessages(sinceUID)
 		if err != nil {
 			return nil, err
+		}
+
+		if maxMessages > 0 && len(msgs) > maxMessages {
+			msgs = msgs[len(msgs)-maxMessages:]
 		}
 
 		subjects := make([]string, 0, len(msgs))
@@ -166,19 +178,19 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		return subjects, nil
 	}
 
-	// seed inbox
+	// seed inbox with the latest 25 messages, regardless of age.
 	inboxCfgCopy := inboxCfg
-	inboxSubjects, err := seedFromMailbox(inboxCfgCopy, 25)
+	inboxSubjects, err := seedFromMailbox(inboxCfgCopy, 25, false)
 	if err != nil {
 		logx.Errorf("initial population: failed seeding inbox %s: %v", inboxCfg.Username, err)
 	}
 
-	// seed sent folder if enabled
+	// seed sent folder subjects from the last 3 months.
 	sentSubjects := []string{}
 	if inboxCfg.EnableSentWhitelist && inboxCfg.SentFolder != "" {
 		sentCfg := inboxCfg
 		sentCfg.Inbox = inboxCfg.SentFolder
-		sentSubjects, err = seedFromMailbox(sentCfg, 25)
+		sentSubjects, err = seedFromMailbox(sentCfg, 0, true)
 		if err != nil {
 			logx.Errorf("initial population: failed seeding sent folder %s: %v", inboxCfg.Username, err)
 		}
@@ -374,6 +386,11 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			// attempt to seed recent-message memory on first run; non-fatal
 			if err := initialPopulation(appCtx, inboxCfg); err != nil {
 				logx.Errorf("Initial population failed for %s: %v", inboxCfg.Username, err)
+			}
+			if recentStore != nil {
+				if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
+					logx.Errorf("Could not run initial consolidation for %s: %v", inboxCfg.Username, err)
+				}
 			}
 		}
 		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d)", maxUID, currentUIDValidity)

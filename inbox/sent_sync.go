@@ -25,7 +25,10 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 	sentCfg := inboxCfg
 	sentCfg.Inbox = inboxCfg.SentFolder
 	sentCfg.MinAge = 0
-	sentCfg.MaxAge = 0
+	sentCfg.MaxAge = inboxCfg.SentFolderMaxAge
+	if sentCfg.MaxAge == 0 {
+		sentCfg.MaxAge = 2160 * time.Hour
+	}
 
 	cp, err := checkpoint.Load(inboxCfg.Host, inboxCfg.Username, inboxCfg.SentFolder)
 	if err != nil {
