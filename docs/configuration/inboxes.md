@@ -14,10 +14,14 @@
 | `minscore`     | integer  | yes      |         | Minimum spam score required to classify as spam (0–100)             | `75`              |
 | `minage`       | duration | no       | `0h`    | Minimum age of message before scanning                              | `0h`              |
 | `maxage`       | duration | no       | `24h`   | Maximum age of message considered                                   | `24h`             |
-| `whitelist`    | string   | no       |         | Whitelist to use (empty/missing = no whitelist)                     | `whitelist1`      |
-| `enable_idle`  | boolean  | no       | `false` | Use IMAP IDLE for real-time new-mail detection instead of polling   | `true`            |
-| `idle_timeout` | duration | no       | `25m`   | How long to hold an IDLE connection before re-issuing it            | `25m`             |
-| `max_retries`  | integer  | no       | `3`     | Maximum retry attempts when provider analysis fails transiently     | `3`               |
+| `whitelist`             | string   | no       |         | Whitelist to use (empty/missing = no whitelist)                     | `whitelist1`      |
+| `enable_sent_whitelist` | boolean  | no       | `false` | Enable sent-folder memory to auto-whitelist senders from outgoing mail | `true`            |
+| `sent_folder`           | string   | no       | `Sent`  | Folder to scan for outgoing messages when building the contact memory | `Sent`            |
+| `sent_folder_maxage`    | duration | no       | `2160h` | How long to retain sent-folder contacts before pruning              | `2160h`            |
+| `sent_folder_schedule`  | string   | no       | `"0 * * * *"` | Cron schedule for periodic sent-folder sync                 | `"0 * * * *"`   |
+| `enable_idle`           | boolean  | no       | `false` | Use IMAP IDLE for real-time new-mail detection instead of polling   | `true`            |
+| `idle_timeout`          | duration | no       | `25m`   | How long to hold an IDLE connection before re-issuing it            | `25m`             |
+| `max_retries`           | integer  | no       | `3`     | Maximum retry attempts when provider analysis fails transiently     | `3`               |
 
 ```yaml
 inboxes:
@@ -34,6 +38,10 @@ inboxes:
     minage: 0h
     maxage: 24h
     whitelist: whitelist1
+    enable_sent_whitelist: true  # enable sent-folder memory to auto-whitelist replies
+    sent_folder: Sent            # folder to scan for outgoing messages
+    sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
+    sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
     enable_idle: false   # set to true to use IMAP IDLE instead of the cron schedule above
     idle_timeout: 25m    # re-issue IDLE after this duration (keep-alive)
     max_retries: 3       # retry failed analysis jobs up to this many times

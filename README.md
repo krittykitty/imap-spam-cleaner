@@ -22,6 +22,7 @@ Key enhancements over upstream:
 - **Per-provider worker queues** — each provider gets its own bounded, concurrent worker pool with configurable rate limiting and exponential-backoff retries.
 - **HTML→Markdown conversion** — HTML email bodies are converted to simplified Markdown before being sent to AI providers, reducing token usage and noise.
 - **Separate text/HTML body handling** — the most informative body part is selected automatically.
+- **Sent-folder memory** — outgoing recipients are tracked in SQLite so replies can be auto-whitelisted and skip the LLM entirely.
 - **Relevant header extraction** — key authentication and routing headers (`Received`, `DKIM-Signature`, etc.) are forwarded to the AI for better phishing/spoofing detection.
 - **Split system/user prompt** — `system_prompt` sets the AI persona; `user_prompt` carries the email data. Both are fully customisable.
 - **LLM parameters** — `temperature`, `top_p`, and `max_tokens` are configurable per provider.
