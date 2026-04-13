@@ -263,7 +263,22 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 	return filtered, nil
 }
 
-func extractRelevantHeaders(raw []byte) string {
+// RelevantHeaders is the ordered list of header names extracted for spam analysis.
+var RelevantHeaders = []string{
+	"Authentication-Results",
+	"DKIM-Signature",
+	"ARC-Authentication-Results",
+	"Received",
+	"Return-Path",
+	"Message-ID",
+	"Reply-To",
+	"Sender",
+}
+
+// extractRelevantHeaders parses the raw message bytes and returns a
+// map[string]string of the headers listed in RelevantHeaders.  When a header
+// appears more than once (e.g. Received) its values are joined with "\n".
+func extractRelevantHeaders(raw []byte) map[string]string {
 	end := bytes.Index(raw, []byte("\r\n\r\n"))
 	if end < 0 {
 		end = bytes.Index(raw, []byte("\n\n"))
@@ -273,50 +288,51 @@ func extractRelevantHeaders(raw []byte) string {
 	}
 
 	headers := raw[:end]
-	relevant := []string{
-		"Authentication-Results",
-		"DKIM-Signature",
-		"ARC-Authentication-Results",
-		"Received",
-		"Return-Path",
-		"Message-ID",
-		"Reply-To",
-		"Sender",
-	}
+	result := make(map[string]string, len(RelevantHeaders))
 
-	var out []string
 	scanner := bufio.NewScanner(bytes.NewReader(headers))
-	current := ""
-	include := false
+	currentName := ""
+	currentValue := ""
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			break
 		}
 		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-			if include {
-				current += "\n" + line
+			// Continuation line — append to the current header value.
+			if currentName != "" {
+				currentValue += "\n" + line
 			}
 			continue
 		}
-		if include && current != "" {
-			out = append(out, current)
+		// Flush the previous header before starting a new one.
+		if currentName != "" {
+			if existing, ok := result[currentName]; ok {
+				result[currentName] = existing + "\n" + currentValue
+			} else {
+				result[currentName] = currentValue
+			}
+			currentName = ""
+			currentValue = ""
 		}
-		include = false
-		current = ""
-		for _, name := range relevant {
+		for _, name := range RelevantHeaders {
 			if strings.HasPrefix(strings.ToLower(line), strings.ToLower(name)+":") {
-				include = true
-				current = line
+				currentName = name
+				currentValue = strings.TrimSpace(line[len(name)+1:])
 				break
 			}
 		}
 	}
-	if include && current != "" {
-		out = append(out, current)
+	// Flush the last header.
+	if currentName != "" {
+		if existing, ok := result[currentName]; ok {
+			result[currentName] = existing + "\n" + currentValue
+		} else {
+			result[currentName] = currentValue
+		}
 	}
 
-	return strings.Join(out, "\n")
+	return result
 }
 
 func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {

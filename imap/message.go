@@ -19,5 +19,5 @@ type Message struct {
 	HtmlBody    string
 	Date        time.Time
 	Raw         []byte
-	Headers     string
+	Headers     map[string]string
 }
