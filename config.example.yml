@@ -153,7 +153,7 @@ inboxes:                          # inboxes to be checked
     # sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
     # sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
     recent_consolidation_every: 50 # run consolidation after this many processed messages
-    recent_consolidation_interval: 14d # refresh consolidation if older than this interval
+    recent_consolidation_interval: 336h # refresh consolidation if older than this interval (14 days)
     max_retries: 3                 # optional: max retry attempts for provider analysis (0 disables retries)
     # enable_idle: false          # set to true to use IMAP IDLE instead of the cron schedule above
     # idle_timeout: 25m           # re-issue IDLE after this duration (RFC 2177 compliance, default 25m)

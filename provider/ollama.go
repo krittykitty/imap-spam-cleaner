@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -93,7 +92,8 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp)
-	if err := json.Unmarshal([]byte(body), &res); err != nil {
+	res, err = parseAnalysisResponse(body)
+	if err != nil {
 		return AnalysisResponse{}, err
 	}
 

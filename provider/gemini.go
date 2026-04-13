@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -103,7 +102,8 @@ func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text)
-	if err := json.Unmarshal([]byte(body), &res); err != nil {
+	res, err = parseAnalysisResponse(body)
+	if err != nil {
 		return AnalysisResponse{}, err
 	}
 

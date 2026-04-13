@@ -112,6 +112,9 @@ func New(shutdownCtx context.Context, providerType string, providerConfig map[st
 						if err == nil {
 							break
 						}
+						if provider.IsNonRetryable(err) {
+							break
+						}
 						if attempt < job.maxRetries {
 							select {
 							case <-dctx.Done():

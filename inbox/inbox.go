@@ -596,6 +596,20 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		return err
 	}
 	if len(messages) == 0 && prevConsolidation == "" {
+		logx.Infof("No recent memory found for %s; running initial population bootstrap", inboxCfg.Username)
+		if err := initialPopulation(ctx, inboxCfg); err != nil {
+			return fmt.Errorf("initial population bootstrap failed: %w", err)
+		}
+		messages, err = recentStore.GetRecentMessages(50, time.Now().UTC().Add(-90*24*time.Hour))
+		if err != nil {
+			return err
+		}
+		prevConsolidation, err = recentStore.GetLatestConsolidation()
+		if err != nil {
+			return err
+		}
+	}
+	if len(messages) == 0 && prevConsolidation == "" {
 		return nil
 	}
 
