@@ -4,6 +4,8 @@ logging:
 providers:                        # providers to be used for inboxes
   prov1:                          # provider name
     type: openai                  # provider type
+    # concurrency: 1              # optional: number of parallel worker goroutines (default 1)
+    # rate_limit: 0               # optional: maximum API calls per second; 0 = unlimited
     config:                       # provider specific configuration
       apikey: some-api-key        # apikey
       model: gpt-4o-mini          # gpt model to use
@@ -34,6 +36,8 @@ providers:                        # providers to be used for inboxes
       #   {{.HtmlBody}}
   prov2:                          # provider name
     type: ollama                  # provider type
+    # concurrency: 1              # optional: number of parallel worker goroutines (default 1)
+    # rate_limit: 0               # optional: maximum API calls per second; 0 = unlimited
     config:                       # provider specific configuration
       url: http://127.0.0.1:11434 # url
       model: gpt-oss:20b          # model to use
@@ -43,6 +47,8 @@ providers:                        # providers to be used for inboxes
       # max_tokens: 512           # optional: max tokens in the response (maps to num_predict)
   prov3:                          # provider name
     type: spamassassin            # provider type
+    # concurrency: 1              # optional: number of parallel worker goroutines (default 1)
+    # rate_limit: 0               # optional: maximum API calls per second; 0 = unlimited
     config:                       # provider specific configuration
       host: 127.0.0.1             # spamassassin host
       port: 783                   # spamassassin port
@@ -50,6 +56,8 @@ providers:                        # providers to be used for inboxes
       timeout: 10s                # connection timeout
   prov4:                          # provider name
     type: gemini                  # provider type
+    # concurrency: 1              # optional: number of parallel worker goroutines (default 1)
+    # rate_limit: 0               # optional: maximum API calls per second; 0 = unlimited
     config:                       # provider specific configuration
       apikey: some-api-key        # apikey
       model: gemini-2.5-flash     # model to use
@@ -82,3 +90,4 @@ inboxes:                          # inboxes to be checked
     whitelist: whitelist1         # whitelist to use, empty/missing = no whitelist
     # enable_idle: false          # set to true to use IMAP IDLE instead of the cron schedule above
     # idle_timeout: 25m           # re-issue IDLE after this duration (RFC 2177 compliance, default 25m)
+    # max_retries: 3              # maximum number of analysis retries on failure (IDLE path only, default 0)

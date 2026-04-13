@@ -25,8 +25,10 @@ type Logging struct {
 }
 
 type Provider struct {
-	Type   string            `yaml:"type"   validate:"required,oneof=openai ollama spamassassin gemini"`
-	Config map[string]string `yaml:"config" validate:"required"`
+	Type        string            `yaml:"type"        validate:"required,oneof=openai ollama spamassassin gemini"`
+	Config      map[string]string `yaml:"config"      validate:"required"`
+	Concurrency int               `yaml:"concurrency" validate:"omitempty,gte=1"`
+	RateLimit   float64           `yaml:"rate_limit"  validate:"omitempty,gte=0"`
 }
 
 const DefaultIdleTimeout = 25 * time.Minute
@@ -47,6 +49,7 @@ type Inbox struct {
 	Whitelist   string        `yaml:"whitelist"    validate:"omitempty"`
 	EnableIdle  bool          `yaml:"enable_idle"  validate:"omitempty"`
 	IdleTimeout time.Duration `yaml:"idle_timeout" validate:"omitempty"`
+	MaxRetries  int           `yaml:"max_retries"  validate:"omitempty,gte=0"`
 }
 
 func LoadConfig() (*Config, error) {

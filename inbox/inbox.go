@@ -9,12 +9,43 @@ import (
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
 	"github.com/dominicgisler/imap-spam-cleaner/checkpoint"
+	"github.com/dominicgisler/imap-spam-cleaner/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/go-co-op/gocron/v2"
 )
+
+// buildDispatchers creates one Dispatcher per provider that has at least one
+// IDLE-enabled inbox. Providers only used by cron-scheduled inboxes do not get
+// a dispatcher (they create a local provider instance per run).
+func buildDispatchers(cfg *app.Config) map[string]*dispatcher.Dispatcher {
+	idleProviders := make(map[string]struct{})
+	for _, inbox := range cfg.Inboxes {
+		if inbox.EnableIdle {
+			idleProviders[inbox.Provider] = struct{}{}
+		}
+	}
+
+	dispatchers := make(map[string]*dispatcher.Dispatcher, len(idleProviders))
+	for name := range idleProviders {
+		prov := cfg.Providers[name]
+		concurrency := prov.Concurrency
+		if concurrency < 1 {
+			concurrency = 1
+		}
+		d, err := dispatcher.New(prov.Type, prov.Config, concurrency, prov.RateLimit)
+		if err != nil {
+			logx.Errorf("Could not create dispatcher for provider %s: %v", name, err)
+			continue
+		}
+		logx.Debugf("Created dispatcher for provider %s (concurrency=%d rate_limit=%.2f)",
+			name, concurrency, prov.RateLimit)
+		dispatchers[name] = d
+	}
+	return dispatchers
+}
 
 func Schedule(ctx app.Context) {
 
@@ -27,6 +58,13 @@ func Schedule(ctx app.Context) {
 	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	dispatchers := buildDispatchers(ctx.Config)
+	defer func() {
+		for _, d := range dispatchers {
+			d.Stop()
+		}
+	}()
+
 	jobs := 0
 	idleCount := 0
 	for i, inbox := range ctx.Config.Inboxes {
@@ -38,7 +76,7 @@ func Schedule(ctx app.Context) {
 
 		if inbox.EnableIdle {
 			logx.Infof("Skipping cron for idle inbox %s", inbox.Username)
-			go StartIdle(shutdownCtx, ctx, inbox, prov)
+			go StartIdle(shutdownCtx, ctx, inbox, prov, dispatchers[inbox.Provider])
 			idleCount++
 			continue
 		}
@@ -83,7 +121,20 @@ func RunAllInboxes(ctx app.Context) {
 	}
 }
 
-func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+// processInbox is the cron-path entry point. It creates a fresh local provider
+// instance for each run and processes the inbox sequentially.
+func processInbox(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+	processInboxInternal(context.Background(), appCtx, inboxCfg, prov, nil)
+}
+
+// processInboxInternal is the shared implementation used by both the cron and
+// IDLE paths.
+//
+// When disp is non-nil (IDLE path), analysis is delegated to the dispatcher,
+// which provides rate-limiting and exponential-backoff retry; the local
+// provider instance is not created.  When disp is nil (cron path), a local
+// provider is created and analysis is performed sequentially without retries.
+func processInboxInternal(goCtx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher) {
 
 	var err error
 	var p provider.Provider
@@ -174,15 +225,19 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Loaded message UIDs for processing: %v", loadedUIDs)
 	}
 
-	p, err = provider.New(prov.Type)
-	if err != nil {
-		logx.Errorf("Could not load provider: %v\n", err)
-		return
-	}
+	// Initialise a local provider only when the dispatcher is not available
+	// (cron path). The dispatcher manages its own pool of initialised providers.
+	if disp == nil {
+		p, err = provider.New(prov.Type)
+		if err != nil {
+			logx.Errorf("Could not load provider: %v\n", err)
+			return
+		}
 
-	if err = p.Init(prov.Config); err != nil {
-		logx.Errorf("Could not init provider: %v\n", err)
-		return
+		if err = p.Init(prov.Config); err != nil {
+			logx.Errorf("Could not init provider: %v\n", err)
+			return
+		}
 	}
 
 	moved := 0
@@ -216,7 +271,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
 		}
 
-		if wl, ok := ctx.Config.Whitelists[inboxCfg.Whitelist]; ok {
+		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
 			trustedSender := false
 			for _, rgx := range wl {
 				if rgx.Match([]byte(m.From)) {
@@ -231,7 +286,12 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			}
 		}
 
-		n, err := p.Analyze(m)
+		var n int
+		if disp != nil {
+			n, err = disp.Analyze(goCtx, m, inboxCfg.MaxRetries)
+		} else {
+			n, err = p.Analyze(m)
+		}
 		if err != nil {
 			logx.Errorf("Could not analyze message #%d (%s): %v\n", m.UID, m.Subject, err)
 			logx.Infof("Continuing after failed analysis for UID %d (marked processed, will not retry)", m.UID)
@@ -241,7 +301,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, n)
 
 		if n >= inboxCfg.MinScore {
-			if ctx.Options.AnalyzeOnly {
+			if appCtx.Options.AnalyzeOnly {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
 				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {

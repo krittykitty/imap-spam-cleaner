@@ -40,7 +40,7 @@ reconnects with exponential back-off on network errors.
 
 ---
 
-### 3. Per-provider worker queues and dispatcher (`internal/dispatcher/`)
+### 3. Per-provider worker queues and dispatcher (`dispatcher/`)
 
 **Upstream behaviour:** Analysis was always sequential — one message at a time per inbox run.
 
@@ -49,9 +49,12 @@ configured provider.  `concurrency` controls pool size; `rate_limit` attaches a 
 apply exponential back-off retry logic (configurable via `max_retries` on the inbox) before reporting a terminal
 failure.
 
-This component is used by the IDLE path.  Cron-scheduled inboxes are unaffected.
+This component is used by the IDLE path.  Cron-scheduled inboxes are unaffected (they use a single sequential
+local provider instance per run, as before).
 
-**Why:** Allows multiple messages to be analysed in parallel while still respecting provider API rate limits.
+**Why:** Allows multiple IDLE inboxes using the same provider to be analysed in parallel while still respecting
+provider API rate limits.  The retry logic improves resilience against transient provider errors without
+requeueing messages for the next inbox scan.
 
 ---
 
@@ -140,8 +143,7 @@ validity for Ollama) before the application begins processing mail.  Health chec
 | Field / Key                            | Upstream          | Fork                                   | Notes                                               |
 |----------------------------------------|-------------------|----------------------------------------|-----------------------------------------------------|
 | `providers.<name>.concurrency`         | absent            | added (`int`, default `1`)             | Worker pool size for IDLE dispatcher                |
-| `providers.<name>.rate_limit`          | absent            | added (`float`, default `0`)           | Token-bucket limiter (calls/second)                 |
-| `providers.<name>.config.prompt`       | present           | deprecated, still works                | Replaced by `system_prompt` + `user_prompt`         |
+| `providers.<name>.rate_limit`          | absent            | added (`float`, default `0`)           | Token-bucket limiter (calls/second)                 || `providers.<name>.config.prompt`       | present           | deprecated, still works                | Replaced by `system_prompt` + `user_prompt`         |
 | `providers.<name>.config.system_prompt`| absent            | added (`string`, optional)             | System-role persona for AI providers                |
 | `providers.<name>.config.user_prompt`  | absent            | added (`string`, optional)             | User-role email-data template (Go template)         |
 | `providers.<name>.config.temperature`  | absent            | added (`float`, optional)              | AI sampling temperature                             |
@@ -171,8 +173,7 @@ validity for Ollama) before the application begins processing mail.  Health chec
 
 ## Proposed future improvements
 
-1. **Health-check wiring** — `HealthCheck()` is implemented on all providers but is not called during normal startup.
-   Wire it into `app/context.go` or `main.go` so broken providers are detected before the first inbox run.
+1. ~~**Per-provider worker queues** — implemented in `dispatcher/`.~~ ✅ Done.
 
 2. **Cron-path concurrency** — The cron-scheduled `processInbox` path is still single-threaded.  Multiple inboxes
    scheduled at the same second will execute one after the other.  Consider running each scheduled inbox in its own
@@ -190,8 +191,9 @@ validity for Ollama) before the application begins processing mail.  Health chec
    YAML unmarshaller must construct them.  A marshalling failure (invalid regex) is caught by the validator, but the
    error message is not user-friendly.  Consider storing them as strings and compiling lazily with a better error.
 
-6. **Dispatcher back-pressure on cron path** — The `Dispatcher` is created even when no IDLE inboxes are configured.
-   Consider skipping its creation when it will not be used.
+6. **Dispatcher for cron path** — The `Dispatcher` is only created for providers used by IDLE inboxes.
+   The cron path creates a fresh local provider instance per run.  Consider sharing the dispatcher in the cron
+   path too so that `concurrency` and `rate_limit` are respected there as well.
 
 7. **Structured logging** — The `logx` wrapper around logrus uses free-form format strings.  Adopting structured
    fields (e.g. `logrus.WithField`) would make log aggregation and filtering easier in production.

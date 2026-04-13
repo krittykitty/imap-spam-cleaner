@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
+	"github.com/dominicgisler/imap-spam-cleaner/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/emersion/go-imap/v2/imapclient"
 )
@@ -19,9 +20,14 @@ const (
 
 // StartIdle runs a blocking IMAP IDLE loop for a single inbox until ctx is
 // cancelled. It performs an initial catch-up run on startup and re-triggers
-// processInbox whenever the server signals new mail. IDLE is re-issued every
-// idle_timeout to comply with RFC 2177. Reconnection uses exponential backoff.
-func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+// processInboxInternal whenever the server signals new mail. IDLE is re-issued
+// every idle_timeout to comply with RFC 2177. Reconnection uses exponential
+// backoff.
+//
+// disp is the per-provider Dispatcher for this inbox. When non-nil, message
+// analysis is delegated to the dispatcher (rate-limiting + retry); when nil a
+// local provider instance is used.
+func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher) {
 	idleTimeout := inboxCfg.IdleTimeout
 	if idleTimeout <= 0 {
 		idleTimeout = app.DefaultIdleTimeout
@@ -39,7 +45,7 @@ func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov
 			return
 		}
 
-		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu)
+		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu, disp)
 		if ctx.Err() != nil {
 			logx.Infof("IDLE watcher stopping for %s", inboxCfg.Username)
 			return
@@ -67,6 +73,7 @@ func runIdleSession(
 	prov app.Provider,
 	idleTimeout time.Duration,
 	mu *sync.Mutex,
+	disp *dispatcher.Dispatcher,
 ) error {
 	// Channel used by the unilateral-data handler to signal new mail.
 	newMail := make(chan struct{}, 1)
@@ -115,7 +122,7 @@ func runIdleSession(
 	logx.Debugf("IDLE session connected for %s", inboxCfg.Username)
 
 	// Catch-up: process any messages that arrived since the last checkpoint.
-	triggerProcess(appCtx, inboxCfg, prov, mu)
+	triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
 
 	for {
 		if ctx.Err() != nil {
@@ -155,21 +162,22 @@ func runIdleSession(
 
 		if triggered {
 			logx.Debugf("IDLE: new mail notification for %s", inboxCfg.Username)
-			triggerProcess(appCtx, inboxCfg, prov, mu)
+			triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
 		}
 	}
 }
 
-// triggerProcess runs processInbox in a goroutine, guarded by mu to ensure
-// only one concurrent run per inbox.
-func triggerProcess(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, mu *sync.Mutex) {
+// triggerProcess runs processInboxInternal in a goroutine, guarded by mu to
+// ensure only one concurrent run per inbox. The shutdown context (ctx) is
+// forwarded so the processing run can be interrupted on shutdown.
+func triggerProcess(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, mu *sync.Mutex, disp *dispatcher.Dispatcher) {
 	go func() {
 		if !mu.TryLock() {
 			logx.Debugf("IDLE: processInbox already running for %s, skipping trigger", inboxCfg.Username)
 			return
 		}
 		defer mu.Unlock()
-		processInbox(appCtx, inboxCfg, prov)
+		processInboxInternal(ctx, appCtx, inboxCfg, prov, disp)
 	}()
 }
 
