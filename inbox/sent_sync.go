@@ -51,12 +51,12 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 	}
 
 	sinceUID := goimap.UID(cp.LastUID)
-	msgs, err := im.LoadMessages(sinceUID)
+	msgs, err := im.LoadHeaders(sinceUID)
 	if err != nil {
 		return fmt.Errorf("could not load sent folder messages: %w", err)
 	}
 
-	logx.Infof("Loaded %d messages from sent folder %s since UID %d", len(msgs), inboxCfg.SentFolder, sinceUID)
+	logx.Infof("Loaded %d sent headers from sent folder %s since UID %d", len(msgs), inboxCfg.SentFolder, sinceUID)
 
 	recipients := make(map[string]struct{})
 	newestUID := goimap.UID(cp.LastUID)

@@ -114,13 +114,10 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	}
 	defer recentStore.Close()
 
-	// helper to seed from a mailbox (inbox or sent)
-	seedFromMailbox := func(cfg app.Inbox, maxMessages int, useThreeMonthWindow bool) ([]string, error) {
+	// helper to seed inbox messages: latest N messages, including snippet/html body.
+	seedFromMailbox := func(cfg app.Inbox, maxMessages int) ([]string, error) {
 		cfg.MinAge = 0
 		cfg.MaxAge = 0
-		if useThreeMonthWindow {
-			cfg.MaxAge = initialPopulationWindow
-		}
 
 		im, err := imap.New(cfg)
 		if err != nil {
@@ -178,9 +175,43 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		return subjects, nil
 	}
 
+	seedHeadersFromMailbox := func(cfg app.Inbox, useThreeMonthWindow bool) ([]string, error) {
+		cfg.MinAge = 0
+		cfg.MaxAge = 0
+		if useThreeMonthWindow {
+			cfg.MaxAge = initialPopulationWindow
+		}
+
+		im, err := imap.New(cfg)
+		if err != nil {
+			return nil, err
+		}
+		defer im.Close()
+
+		msgs, err := im.LoadHeaders(0)
+		if err != nil {
+			return nil, err
+		}
+
+		subjects := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			if err := recentStore.UpsertMessage(storage.RecentMessage{
+				UID:     uint32(m.UID),
+				From:    m.From,
+				To:      m.To,
+				Subject: m.Subject,
+				Date:    m.Date,
+			}); err != nil {
+				logx.Errorf("initial population: could not insert sent-folder message UID %d: %v", m.UID, err)
+			}
+			subjects = append(subjects, m.Subject)
+		}
+		return subjects, nil
+	}
+
 	// seed inbox with the latest 25 messages, regardless of age.
 	inboxCfgCopy := inboxCfg
-	inboxSubjects, err := seedFromMailbox(inboxCfgCopy, 25, false)
+	inboxSubjects, err := seedFromMailbox(inboxCfgCopy, 25)
 	if err != nil {
 		logx.Errorf("initial population: failed seeding inbox %s: %v", inboxCfg.Username, err)
 	}
@@ -190,7 +221,7 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	if inboxCfg.EnableSentWhitelist && inboxCfg.SentFolder != "" {
 		sentCfg := inboxCfg
 		sentCfg.Inbox = inboxCfg.SentFolder
-		sentSubjects, err = seedFromMailbox(sentCfg, 0, true)
+		sentSubjects, err = seedHeadersFromMailbox(sentCfg, true)
 		if err != nil {
 			logx.Errorf("initial population: failed seeding sent folder %s: %v", inboxCfg.Username, err)
 		}
