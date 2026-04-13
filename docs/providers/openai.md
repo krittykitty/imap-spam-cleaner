@@ -38,7 +38,13 @@ providers:
         Your goal is to detect spam, phishing, and spoofed senders.
       user_prompt: |
         Analyze the following email for its spam potential.
-        Return a spam score between 0 and 100. Only answer with the number itself.
+        Return your analysis as a JSON object with the following fields:
+        {
+          "score": <int 0-100>,
+          "reason": "<short explanation of why this score was given>",
+          "is_phishing": <bool>
+        }
+        Only return the JSON. No other text.
 
         Headers:
         {{.Headers}}

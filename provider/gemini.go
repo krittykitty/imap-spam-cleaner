@@ -2,11 +2,13 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/logx"
 
 	"google.golang.org/genai"
 )
@@ -99,10 +101,12 @@ func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 		return 0, errors.New("empty gemini response")
 	}
 
-	i, err := strconv.ParseInt(resp.Candidates[0].Content.Parts[0].Text, 10, 64)
-	if err != nil {
+	var res AnalysisResponse
+	body := strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text)
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
 		return 0, err
 	}
 
-	return int(i), nil
+	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
+	return res.Score, nil
 }

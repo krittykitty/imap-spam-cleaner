@@ -2,14 +2,16 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/ollama/ollama/api"
 )
 
@@ -89,11 +91,12 @@ func (p *Ollama) Analyze(msg imap.Message) (int, error) {
 		return 0, err
 	}
 
-	i, err := strconv.ParseInt(resp, 10, 64)
-	if err != nil {
+	var res AnalysisResponse
+	body := strings.TrimSpace(resp)
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
 		return 0, err
 	}
 
-	return int(i), nil
+	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
+	return res.Score, nil
 }
-
