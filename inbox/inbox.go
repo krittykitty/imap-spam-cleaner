@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -495,7 +496,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Skipped message UIDs: %v", skippedUIDs)
 	}
 	if recentStore != nil && shouldRunConsolidation(recentStore, inboxCfg, len(processedUIDs)) {
-		if err := runConsolidation(inboxCfg, recentStore, p, prov); err != nil {
+		if err := runConsolidation(ctx, inboxCfg, recentStore, p, prov); err != nil {
 			logx.Errorf("Could not consolidate recent context for %s: %v", inboxCfg.Username, err)
 		}
 	}
@@ -523,7 +524,7 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox, processed
 	return time.Since(meta.CreatedAt) >= cfg.RecentConsolidationInterval
 }
 
-func runConsolidation(inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
+func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
 	recentContext, err := recentStore.GetConsolidatedContext(50, 90*24*time.Hour)
 	if err != nil {
 		return err
@@ -533,17 +534,26 @@ func runConsolidation(inboxCfg app.Inbox, recentStore *storage.RecentStore, p pr
 		return nil
 	}
 
-	var summary string
-	if p == nil {
-		p, err = provider.New(prov.Type)
+	consolidationProvider := prov
+	if inboxCfg.ConsolidationProvider != "" {
+		cp, ok := ctx.Config.Providers[inboxCfg.ConsolidationProvider]
+		if !ok {
+			return fmt.Errorf("invalid consolidation provider %s for inbox %s", inboxCfg.ConsolidationProvider, inboxCfg.Username)
+		}
+		consolidationProvider = cp
+	}
+
+	if p == nil || (inboxCfg.ConsolidationProvider != "" && inboxCfg.ConsolidationProvider != inboxCfg.Provider) {
+		p, err = provider.New(consolidationProvider.Type)
 		if err != nil {
 			return err
 		}
-		if err = p.Init(prov.Config); err != nil {
+		if err = p.Init(consolidationProvider.Config); err != nil {
 			return err
 		}
 	}
 
+	var summary string
 	if consolidator, ok := p.(interface{ Consolidate(string) (string, error) }); ok {
 		summary, err = consolidator.Consolidate(recentContext)
 		if err != nil {

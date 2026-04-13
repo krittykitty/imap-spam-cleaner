@@ -24,8 +24,6 @@ Example:
 providers:
   prov1:
     type: ollama
-    concurrency: 1
-    rate_limit: 0
     config:
       url: http://127.0.0.1:11434
       model: gpt-oss:20b
@@ -33,15 +31,16 @@ providers:
       # temperature: 0.2
       # top_p: 0.95
       # max_tokens: 512
-      prompt: |
-        Analyze the following email for its spam potential.
-        Return your analysis as a JSON object with the following fields:
-        {
-          "score": <int 0-100>,
-          "reason": "<short explanation of why this score was given>",
-          "is_phishing": <bool>
-        }
-        Only return the JSON. No other text.
+      user_prompt: |
+        Analyze the following email for its spam score.
+        Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
+        Return a spam score between 0 and 100. Only output the integer.
+
+        Recent context:
+        {{.Context}}
+
+        Headers:
+        {{.Headers}}
 
         From: {{.From}}
         To: {{.To}}
@@ -50,13 +49,9 @@ providers:
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Headers:
-        {{.Headers}}
-
-        Text body:
-        {{.TextBody}}
-
-        HTML body:
-        {{.HtmlBody}}
+        Email body:
+        {{.Body}}
 ```
+
+Use `consolidation_prompt` inside the provider config and `consolidation_provider` in the inbox definition to run a different LLM provider for consolidation.
 

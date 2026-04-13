@@ -51,7 +51,8 @@ func TestRunConsolidationWithFakeProvider(t *testing.T) {
 	}
 
 	// run consolidation with fake provider
-	if err := runConsolidation(app.Inbox{}, st, &fakeProvider{}, app.Provider{}); err != nil {
+	ctx := app.Context{Config: &app.Config{Providers: map[string]app.Provider{}}}
+	if err := runConsolidation(ctx, app.Inbox{}, st, &fakeProvider{}, app.Provider{}); err != nil {
 		t.Fatalf("runConsolidation failed: %v", err)
 	}
 

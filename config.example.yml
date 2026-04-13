@@ -13,36 +13,31 @@ providers:                        # providers to be used for inboxes
       apikey: some-api-key        # apikey
       model: gpt-4o-mini          # gpt model to use
       maxsize: 100000             # message size limit for prompt (bytes)
-      # temperature: 0.2          # optional: sampling temperature (0.0-2.0)
-      # top_p: 0.95               # optional: nucleus sampling probability
-      # max_tokens: 512           # optional: max tokens in the response
-      # system_prompt: |          # optional: system role instructions (persona/rules)
-      #   You are a spam classification assistant. Analyze emails objectively and return only a JSON object with score, reason, and is_phishing.
-      # user_prompt: |            # optional: user role template with email data (replaces legacy "prompt")
-      #   Analyze the following email for its spam potential.
-      #   Return your analysis as a JSON object with the following fields:
-      #   {
-      #     "score": <int 0-100>,
-      #     "reason": "<short explanation of why this score was given>",
-      #     "is_phishing": <bool>
-      #   }
-      #   Only return the JSON. No other text.
-      #
-      #   Headers:
-      #   {{.Headers}}
-      #
-      #   From: {{.From}}
-      #   To: {{.To}}
-      #   Delivered-To: {{.DeliveredTo}}
-      #   Cc: {{.Cc}}
-      #   Bcc: {{.Bcc}}
-      #   Subject: {{.Subject}}
-      #
-      #   Text body:
-      #   {{.TextBody}}
-      #
-      #   HTML body:
-      #   {{.HtmlBody}}
+      temperature: 0.1            # optional: sampling temperature (0.0-2.0)
+      max_tokens: 8               # optional: max tokens in the response
+      system_prompt: |            # optional: system role instructions (persona/rules)
+        You are a cybersecurity analyst specializing in email fraud.
+        Your goal is to detect spam, phishing, and spoofed senders.
+      user_prompt: |              # optional: user role template with email data (replaces legacy "prompt")
+        Analyze the following email for its spam score.
+        Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
+        Return a spam score between 0 and 100. Only output the integer.
+
+        Recent context:
+        {{.Context}}
+
+        Headers:
+        {{.Headers}}
+
+        From: {{.From}}
+        To: {{.To}}
+        Delivered-To: {{.DeliveredTo}}
+        Cc: {{.Cc}}
+        Bcc: {{.Bcc}}
+        Subject: {{.Subject}}
+
+        Email body:
+        {{.Body}}
   prov2:                          # provider name
     type: ollama                  # provider type
     config:                       # provider specific configuration
@@ -52,6 +47,12 @@ providers:                        # providers to be used for inboxes
       # temperature: 0.2          # optional: sampling temperature
       # top_p: 0.95               # optional: nucleus sampling probability
       # max_tokens: 512           # optional: max tokens in the response (maps to num_predict)
+      consolidation_prompt: |     # optional: custom consolidation prompt
+        Summarize the recent email activity into a short report.
+        Include sender patterns, repeat subjects, and spam signals.
+        Use only the consolidated context and do not add extra JSON.
+
+        {{.Context}}
   prov3:                          # provider name
     type: spamassassin            # provider type
     config:                       # provider specific configuration
@@ -85,6 +86,7 @@ inboxes:                          # inboxes to be checked
     username: user@domain.tld     # imap user
     password: mypass              # imap password
     provider: prov1               # provider used for spam analysis
+    consolidation_provider: prov2 # optional provider used only for consolidation
     inbox: INBOX                  # inbox folder
     spam: INBOX.Spam              # spam folder
     minscore: 75                  # min score to detect spam (0-100)
@@ -95,7 +97,7 @@ inboxes:                          # inboxes to be checked
     # sent_folder: Sent            # folder to scan for outgoing messages
     # sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
     # sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
-    # recent_consolidation_every: 50 # run consolidation after this many processed messages
-    # recent_consolidation_interval: 24h # refresh consolidation if older than this interval
+    recent_consolidation_every: 50 # run consolidation after this many processed messages
+    recent_consolidation_interval: 24h # refresh consolidation if older than this interval
     # enable_idle: false          # set to true to use IMAP IDLE instead of the cron schedule above
     # idle_timeout: 25m           # re-issue IDLE after this duration (RFC 2177 compliance, default 25m)

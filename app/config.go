@@ -53,6 +53,7 @@ type Inbox struct {
 	SentFolderSchedule          string        `yaml:"sent_folder_schedule" validate:"omitempty"`
 	RecentConsolidationEvery    int           `yaml:"recent_consolidation_every" validate:"omitempty,min=1"`
 	RecentConsolidationInterval time.Duration `yaml:"recent_consolidation_interval" validate:"omitempty"`
+	ConsolidationProvider       string        `yaml:"consolidation_provider" validate:"omitempty"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -78,6 +79,11 @@ func LoadConfig() (*Config, error) {
 	for i, inbox := range config.Inboxes {
 		if _, ok := config.Providers[inbox.Provider]; !ok {
 			return nil, fmt.Errorf("invalid provider %s for inbox #%d", inbox.Provider, i)
+		}
+		if inbox.ConsolidationProvider != "" {
+			if _, ok := config.Providers[inbox.ConsolidationProvider]; !ok {
+				return nil, fmt.Errorf("invalid consolidation provider %s for inbox #%d", inbox.ConsolidationProvider, i)
+			}
 		}
 		if _, ok := config.Whitelists[inbox.Whitelist]; inbox.Whitelist != "" && !ok {
 			return nil, fmt.Errorf("invalid whitelist %s for inbox #%d", inbox.Whitelist, i)

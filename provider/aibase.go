@@ -66,13 +66,14 @@ type AnalysisResponse struct {
 }
 
 type AIBase struct {
-	model        string
-	maxsize      int
-	systemPrompt string
-	userPrompt   *template.Template
-	temperature  *float32
-	topP         *float32
-	maxTokens    *int32
+	model               string
+	maxsize             int
+	systemPrompt        string
+	userPrompt          *template.Template
+	consolidationPrompt *template.Template
+	temperature         *float32
+	topP                *float32
+	maxTokens           *int32
 }
 
 func (p *AIBase) ValidateConfig(config map[string]string) error {
@@ -102,6 +103,15 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 	}
 
 	p.userPrompt, err = template.New("user_prompt").Parse(userPromptStr)
+	if err != nil {
+		return err
+	}
+
+	consolidationPromptStr := defaultConsolidationPrompt
+	if config["consolidation_prompt"] != "" {
+		consolidationPromptStr = config["consolidation_prompt"]
+	}
+	p.consolidationPrompt, err = template.New("consolidation_prompt").Parse(consolidationPromptStr)
 	if err != nil {
 		return err
 	}
@@ -264,9 +274,13 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 }
 
 func (p *AIBase) buildConsolidationPrompt(contextText string) (string, error) {
-	tpl, err := template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
-	if err != nil {
-		return "", err
+	tpl := p.consolidationPrompt
+	if tpl == nil {
+		var err error
+		tpl, err = template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	var buf bytes.Buffer

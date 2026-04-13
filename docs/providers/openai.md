@@ -24,8 +24,6 @@ Example:
 providers:
   prov1:
     type: openai
-    concurrency: 2
-    rate_limit: 5.0
     config:
       apikey: some-api-key
       model: gpt-4o-mini
@@ -37,14 +35,12 @@ providers:
         You are a cybersecurity analyst specializing in email fraud.
         Your goal is to detect spam, phishing, and spoofed senders.
       user_prompt: |
-        Analyze the following email for its spam potential.
-        Return your analysis as a JSON object with the following fields:
-        {
-          "score": <int 0-100>,
-          "reason": "<short explanation of why this score was given>",
-          "is_phishing": <bool>
-        }
-        Only return the JSON. No other text.
+        Analyze the following email for its spam score.
+        Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
+        Return a spam score between 0 and 100. Only output the integer.
+
+        Recent context:
+        {{.Context}}
 
         Headers:
         {{.Headers}}
@@ -56,13 +52,9 @@ providers:
         Bcc: {{.Bcc}}
         Subject: {{.Subject}}
 
-        Headers:
-        {{.Headers}}
-
-        Text body:
-        {{.TextBody}}
-
-        HTML body:
-        {{.HtmlBody}}
+        Email body:
+        {{.Body}}
 ```
+
+You can also configure a separate consolidation provider in the inbox definition and use `consolidation_prompt` in that provider's config when you want a dedicated LLM for summarizing recent context.
 
