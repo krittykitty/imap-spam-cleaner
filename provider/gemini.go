@@ -122,9 +122,13 @@ func (p *Gemini) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 	}
 
 	cfg := &genai.GenerateContentConfig{}
-	if p.systemPrompt != "" {
+	systemPrompt := p.systemPrompt
+	if p.consolidationSystemPrompt != "" {
+		systemPrompt = p.consolidationSystemPrompt
+	}
+	if systemPrompt != "" {
 		cfg.SystemInstruction = &genai.Content{
-			Parts: []*genai.Part{{Text: p.systemPrompt}},
+			Parts: []*genai.Part{{Text: systemPrompt}},
 		}
 	}
 	if p.temperature != nil {

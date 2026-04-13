@@ -88,16 +88,16 @@ type AnalysisResponse struct {
 }
 
 type AIBase struct {
-	model                    string
-	maxsize                  int
-	systemPrompt             string
-	userPrompt               *template.Template
+	model                     string
+	maxsize                   int
+	systemPrompt              string
+	userPrompt                *template.Template
 	consolidationSystemPrompt string
-	consolidationUserPrompt  *template.Template
-	consolidationPrompt      *template.Template
-	temperature              *float32
-	topP                     *float32
-	maxTokens                *int32
+	consolidationUserPrompt   *template.Template
+	consolidationPrompt       *template.Template
+	temperature               *float32
+	topP                      *float32
+	maxTokens                 *int32
 }
 
 func (p *AIBase) ValidateConfig(config map[string]string) error {
