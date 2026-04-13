@@ -86,5 +86,9 @@ inboxes:                          # inboxes to be checked
     minage: 0h                    # min age of message
     maxage: 24h                   # max age of message
     whitelist: whitelist1         # whitelist to use, empty/missing = no whitelist
+    # enable_sent_whitelist: true  # enable sent-folder memory to auto-whitelist replies
+    # sent_folder: Sent            # folder to scan for outgoing messages
+    # sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
+    # sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
     # enable_idle: false          # set to true to use IMAP IDLE instead of the cron schedule above
     # idle_timeout: 25m           # re-issue IDLE after this duration (RFC 2177 compliance, default 25m)

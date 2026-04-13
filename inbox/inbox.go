@@ -12,6 +12,7 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
+	"github.com/dominicgisler/imap-spam-cleaner/storage"
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/go-co-op/gocron/v2"
 )
@@ -51,6 +52,20 @@ func Schedule(ctx app.Context) {
 			logx.Errorf("Could not schedule inbox %s (%s): %v", inbox.Username, inbox.Schedule, err)
 			continue
 		}
+
+		if inbox.EnableSentWhitelist {
+			if err := syncSentFolder(ctx, inbox); err != nil {
+				logx.Errorf("Could not perform initial sent-folder sync for %s: %v", inbox.Username, err)
+			}
+			logx.Infof("Scheduling sent-folder sync for %s (%s)", inbox.Username, inbox.SentFolderSchedule)
+			if _, err = s.NewJob(
+				gocron.CronJob(inbox.SentFolderSchedule, false),
+				gocron.NewTask(syncSentFolder, ctx, inbox),
+			); err != nil {
+				logx.Errorf("Could not schedule sent-folder sync for %s (%s): %v", inbox.Username, inbox.SentFolderSchedule, err)
+				continue
+			}
+		}
 		jobs++
 	}
 
@@ -78,6 +93,11 @@ func RunAllInboxes(ctx app.Context) {
 		if !ok {
 			logx.Errorf("Invalid provider %s for inbox %d", inbox.Provider, i)
 			continue
+		}
+		if inbox.EnableSentWhitelist {
+			if err := syncSentFolder(ctx, inbox); err != nil {
+				logx.Errorf("Sent-folder sync failed for %s: %v", inbox.Username, err)
+			}
 		}
 		processInbox(ctx, inbox, prov)
 	}
@@ -174,16 +194,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Loaded message UIDs for processing: %v", loadedUIDs)
 	}
 
-	p, err = provider.New(prov.Type)
-	if err != nil {
-		logx.Errorf("Could not load provider: %v\n", err)
-		return
-	}
-
-	if err = p.Init(prov.Config); err != nil {
-		logx.Errorf("Could not init provider: %v\n", err)
-		return
-	}
+	providerInitialized := false
 
 	moved := 0
 	processedUIDs := make([]uint32, 0, len(msgs))
@@ -229,6 +240,33 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 				skippedUIDs = append(skippedUIDs, uint32(m.UID))
 				continue
 			}
+		}
+
+		if inboxCfg.EnableSentWhitelist {
+			dbPath := storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+			if st, ok := ctx.Storages[dbPath]; ok && st != nil {
+				known, err := st.HasContact(m.From)
+				if err != nil {
+					logx.Errorf("Could not check sent-folder contact memory for %s: %v", m.From, err)
+				} else if known {
+					logx.Debugf("Skipping message #%d (%s) because sender %s is in sent-folder contact memory", m.UID, m.Subject, m.From)
+					skippedUIDs = append(skippedUIDs, uint32(m.UID))
+					continue
+				}
+			}
+		}
+
+		if !providerInitialized {
+			p, err = provider.New(prov.Type)
+			if err != nil {
+				logx.Errorf("Could not load provider: %v", err)
+				return
+			}
+			if err = p.Init(prov.Config); err != nil {
+				logx.Errorf("Could not init provider: %v", err)
+				return
+			}
+			providerInitialized = true
 		}
 
 		n, err := p.Analyze(m)

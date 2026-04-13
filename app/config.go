@@ -32,21 +32,25 @@ type Provider struct {
 const DefaultIdleTimeout = 25 * time.Minute
 
 type Inbox struct {
-	Schedule    string        `yaml:"schedule"     validate:"required_without=EnableIdle"`
-	Host        string        `yaml:"host"         validate:"required"`
-	Port        int           `yaml:"port"         validate:"required"`
-	TLS         bool          `yaml:"tls"          validate:"omitempty"`
-	Username    string        `yaml:"username"     validate:"required"`
-	Password    string        `yaml:"password"     validate:"required"`
-	Provider    string        `yaml:"provider"     validate:"required"`
-	Inbox       string        `yaml:"inbox"        validate:"required"`
-	Spam        string        `yaml:"spam"         validate:"required"`
-	MinScore    int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
-	MinAge      time.Duration `yaml:"minage"       validate:"omitempty"`
-	MaxAge      time.Duration `yaml:"maxage"       validate:"omitempty"`
-	Whitelist   string        `yaml:"whitelist"    validate:"omitempty"`
-	EnableIdle  bool          `yaml:"enable_idle"  validate:"omitempty"`
-	IdleTimeout time.Duration `yaml:"idle_timeout" validate:"omitempty"`
+	Schedule            string        `yaml:"schedule"     validate:"required_without=EnableIdle"`
+	Host                string        `yaml:"host"         validate:"required"`
+	Port                int           `yaml:"port"         validate:"required"`
+	TLS                 bool          `yaml:"tls"          validate:"omitempty"`
+	Username            string        `yaml:"username"     validate:"required"`
+	Password            string        `yaml:"password"     validate:"required"`
+	Provider            string        `yaml:"provider"     validate:"required"`
+	Inbox               string        `yaml:"inbox"        validate:"required"`
+	Spam                string        `yaml:"spam"         validate:"required"`
+	MinScore            int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
+	MinAge              time.Duration `yaml:"minage"       validate:"omitempty"`
+	MaxAge              time.Duration `yaml:"maxage"       validate:"omitempty"`
+	Whitelist           string        `yaml:"whitelist"    validate:"omitempty"`
+	EnableIdle          bool          `yaml:"enable_idle"  validate:"omitempty"`
+	IdleTimeout         time.Duration `yaml:"idle_timeout" validate:"omitempty"`
+	EnableSentWhitelist bool          `yaml:"enable_sent_whitelist" validate:"omitempty"`
+	SentFolder          string        `yaml:"sent_folder"  validate:"omitempty"`
+	SentFolderMaxAge    time.Duration `yaml:"sent_folder_maxage" validate:"omitempty"`
+	SentFolderSchedule  string        `yaml:"sent_folder_schedule" validate:"omitempty"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -75,6 +79,20 @@ func LoadConfig() (*Config, error) {
 		}
 		if _, ok := config.Whitelists[inbox.Whitelist]; inbox.Whitelist != "" && !ok {
 			return nil, fmt.Errorf("invalid whitelist %s for inbox #%d", inbox.Whitelist, i)
+		}
+	}
+
+	for i := range config.Inboxes {
+		if config.Inboxes[i].EnableSentWhitelist {
+			if config.Inboxes[i].SentFolder == "" {
+				config.Inboxes[i].SentFolder = "Sent"
+			}
+			if config.Inboxes[i].SentFolderMaxAge == 0 {
+				config.Inboxes[i].SentFolderMaxAge = 2160 * time.Hour
+			}
+			if config.Inboxes[i].SentFolderSchedule == "" {
+				config.Inboxes[i].SentFolderSchedule = "0 * * * *"
+			}
 		}
 	}
 
