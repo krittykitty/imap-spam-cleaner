@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
+	"github.com/dominicgisler/imap-spam-cleaner/internal/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/emersion/go-imap/v2/imapclient"
 )
@@ -21,7 +22,7 @@ const (
 // cancelled. It performs an initial catch-up run on startup and re-triggers
 // processInbox whenever the server signals new mail. IDLE is re-issued every
 // idle_timeout to comply with RFC 2177. Reconnection uses exponential backoff.
-func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher) {
 	idleTimeout := inboxCfg.IdleTimeout
 	if idleTimeout <= 0 {
 		idleTimeout = app.DefaultIdleTimeout
@@ -39,7 +40,7 @@ func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov
 			return
 		}
 
-		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu)
+		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu, disp)
 		if ctx.Err() != nil {
 			logx.Infof("IDLE watcher stopping for %s", inboxCfg.Username)
 			return
@@ -67,6 +68,7 @@ func runIdleSession(
 	prov app.Provider,
 	idleTimeout time.Duration,
 	mu *sync.Mutex,
+	disp *dispatcher.Dispatcher,
 ) error {
 	// Channel used by the unilateral-data handler to signal new mail.
 	newMail := make(chan struct{}, 1)
@@ -115,7 +117,7 @@ func runIdleSession(
 	logx.Debugf("IDLE session connected for %s", inboxCfg.Username)
 
 	// Catch-up: process any messages that arrived since the last checkpoint.
-	triggerProcess(appCtx, inboxCfg, prov, mu)
+	triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
 
 	for {
 		if ctx.Err() != nil {
@@ -155,21 +157,25 @@ func runIdleSession(
 
 		if triggered {
 			logx.Debugf("IDLE: new mail notification for %s", inboxCfg.Username)
-			triggerProcess(appCtx, inboxCfg, prov, mu)
+			triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
 		}
 	}
 }
 
 // triggerProcess runs processInbox in a goroutine, guarded by mu to ensure
 // only one concurrent run per inbox.
-func triggerProcess(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, mu *sync.Mutex) {
+func triggerProcess(runCtx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, mu *sync.Mutex, disp *dispatcher.Dispatcher) {
 	go func() {
 		if !mu.TryLock() {
 			logx.Debugf("IDLE: processInbox already running for %s, skipping trigger", inboxCfg.Username)
 			return
 		}
 		defer mu.Unlock()
-		processInbox(appCtx, inboxCfg, prov)
+		if disp == nil {
+			processInbox(appCtx, inboxCfg, prov)
+		} else {
+			processInboxInternal(appCtx, inboxCfg, prov, disp, runCtx)
+		}
 	}()
 }
 

@@ -84,7 +84,7 @@ func TestStartIdleContextCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		StartIdle(ctx, appCtx, inboxCfg, prov)
+		StartIdle(ctx, appCtx, inboxCfg, prov, nil)
 	}()
 
 	select {
@@ -111,7 +111,7 @@ func TestRunIdleSessionDialError(t *testing.T) {
 	appCtx := app.Context{}
 	var mu sync.Mutex
 
-	err := runIdleSession(ctx, appCtx, inboxCfg, prov, 25*time.Minute, &mu)
+	err := runIdleSession(ctx, appCtx, inboxCfg, prov, 25*time.Minute, &mu, nil)
 	if err == nil {
 		t.Error("expected an error when dialling an unreachable server")
 	}

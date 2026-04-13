@@ -12,6 +12,7 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/app"
 	"github.com/dominicgisler/imap-spam-cleaner/checkpoint"
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/internal/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
 	"github.com/dominicgisler/imap-spam-cleaner/storage"
@@ -29,6 +30,8 @@ func Schedule(ctx app.Context) {
 
 	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Build dispatchers for providers that are used by any IDLE inboxes.
+	dispatchers := buildDispatchers(ctx, shutdownCtx)
 
 	jobs := 0
 	idleCount := 0
@@ -41,7 +44,8 @@ func Schedule(ctx app.Context) {
 
 		if inbox.EnableIdle {
 			logx.Infof("Skipping cron for idle inbox %s", inbox.Username)
-			go StartIdle(shutdownCtx, ctx, inbox, prov)
+			// pass a dispatcher for the provider if one exists (may be nil)
+			go StartIdle(shutdownCtx, ctx, inbox, prov, dispatchers[inbox.Provider])
 			idleCount++
 			continue
 		}
@@ -82,6 +86,13 @@ func Schedule(ctx app.Context) {
 	logx.Debugf("Received %s, shutting down", sig.String())
 
 	cancel()
+
+	// Close all dispatchers to ensure workers exit cleanly.
+	for _, d := range dispatchers {
+		if d != nil {
+			d.Close()
+		}
+	}
 
 	if err = s.Shutdown(); err != nil {
 		logx.Errorf("Could not shutdown scheduler: %v ", err)
@@ -224,7 +235,41 @@ func RunAllInboxes(ctx app.Context) {
 	}
 }
 
+// buildDispatchers creates one dispatcher per provider that is used by at
+// least one IDLE-enabled inbox. The returned map keys are provider names as
+// referenced in the config (not provider types).
+func buildDispatchers(ctx app.Context, shutdownCtx context.Context) map[string]*dispatcher.Dispatcher {
+	used := make(map[string]struct{})
+	for _, inbox := range ctx.Config.Inboxes {
+		if inbox.EnableIdle {
+			used[inbox.Provider] = struct{}{}
+		}
+	}
+
+	dispatchers := make(map[string]*dispatcher.Dispatcher)
+	for name := range used {
+		prov, ok := ctx.Config.Providers[name]
+		if !ok {
+			logx.Errorf("buildDispatchers: invalid provider reference %s", name)
+			continue
+		}
+		d, err := dispatcher.New(shutdownCtx, prov.Type, prov.Config, prov.Concurrency, prov.RateLimit)
+		if err != nil {
+			logx.Errorf("Could not create dispatcher for provider %s: %v", name, err)
+			dispatchers[name] = nil
+			continue
+		}
+		dispatchers[name] = d
+		logx.Debugf("Created dispatcher for provider %s (concurrency=%d, rate_limit=%.2f)", name, prov.Concurrency, prov.RateLimit)
+	}
+	return dispatchers
+}
+
 func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+	processInboxInternal(ctx, inboxCfg, prov, nil, context.Background())
+}
+
+func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher, runCtx context.Context) {
 
 	var err error
 	var p provider.Provider
@@ -404,7 +449,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
 		}
 
-		if wl, ok := ctx.Config.Whitelists[inboxCfg.Whitelist]; ok {
+		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
 			trustedSender := false
 			for _, rgx := range wl {
 				if rgx.Match([]byte(m.From)) {
@@ -424,7 +469,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 
 		if inboxCfg.EnableSentWhitelist {
 			dbPath := storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
-			if st, ok := ctx.Storages[dbPath]; ok && st != nil {
+			if st, ok := appCtx.Storages[dbPath]; ok && st != nil {
 				known, err := st.HasContact(m.From)
 				if err != nil {
 					logx.Errorf("Could not check sent-folder contact memory for %s: %v", m.From, err)
@@ -446,20 +491,26 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			}
 		}
 
-		if !providerInitialized {
-			p, err = provider.New(prov.Type)
-			if err != nil {
-				logx.Errorf("Could not load provider: %v", err)
-				return
+		var analysis provider.AnalysisResponse
+		if disp == nil {
+			if !providerInitialized {
+				p, err = provider.New(prov.Type)
+				if err != nil {
+					logx.Errorf("Could not load provider: %v", err)
+					return
+				}
+				if err = p.Init(prov.Config); err != nil {
+					logx.Errorf("Could not init provider: %v", err)
+					return
+				}
+				providerInitialized = true
 			}
-			if err = p.Init(prov.Config); err != nil {
-				logx.Errorf("Could not init provider: %v", err)
-				return
-			}
-			providerInitialized = true
+
+			analysis, err = p.Analyze(m)
+		} else {
+			analysis, err = disp.Analyze(runCtx, m, inboxCfg.MaxRetries)
 		}
 
-		analysis, err := p.Analyze(m)
 		if err != nil {
 			logx.Errorf("Could not analyze message #%d (%s): %v\n", m.UID, m.Subject, err)
 			logx.Infof("Continuing after failed analysis for UID %d (marked processed, will not retry)", m.UID)
@@ -474,7 +525,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, analysis.Score)
 
 		if analysis.Score >= inboxCfg.MinScore {
-			if ctx.Options.AnalyzeOnly {
+			if appCtx.Options.AnalyzeOnly {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
 				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {
@@ -496,7 +547,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Skipped message UIDs: %v", skippedUIDs)
 	}
 	if recentStore != nil && shouldRunConsolidation(recentStore, inboxCfg, len(processedUIDs)) {
-		if err := runConsolidation(ctx, inboxCfg, recentStore, p, prov); err != nil {
+		if err := runConsolidation(appCtx, inboxCfg, recentStore, p, prov); err != nil {
 			logx.Errorf("Could not consolidate recent context for %s: %v", inboxCfg.Username, err)
 		}
 	}

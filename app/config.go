@@ -34,8 +34,10 @@ type Logging struct {
 }
 
 type Provider struct {
-	Type   string            `yaml:"type"   validate:"required,oneof=openai ollama spamassassin gemini"`
-	Config map[string]string `yaml:"config" validate:"required"`
+	Type        string            `yaml:"type"   validate:"required,oneof=openai ollama spamassassin gemini"`
+	Concurrency int               `yaml:"concurrency" validate:"omitempty,min=1"`
+	RateLimit   float64           `yaml:"rate_limit" validate:"omitempty"`
+	Config      map[string]string `yaml:"config" validate:"required"`
 }
 
 const DefaultIdleTimeout = 25 * time.Minute
@@ -63,6 +65,7 @@ type Inbox struct {
 	RecentConsolidationEvery    int           `yaml:"recent_consolidation_every" validate:"omitempty,min=1"`
 	RecentConsolidationInterval time.Duration `yaml:"recent_consolidation_interval" validate:"omitempty"`
 	ConsolidationProvider       string        `yaml:"consolidation_provider" validate:"omitempty"`
+	MaxRetries                  int           `yaml:"max_retries" validate:"omitempty,min=0"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -96,6 +99,13 @@ func LoadConfig() (*Config, error) {
 		}
 		if config.Defaults.ConsolidationPrompt != "" && prov.Config["consolidation_prompt"] == "" {
 			prov.Config["consolidation_prompt"] = config.Defaults.ConsolidationPrompt
+		}
+		// provider-level defaults
+		if prov.Concurrency <= 0 {
+			prov.Concurrency = 1
+		}
+		if prov.RateLimit < 0 {
+			prov.RateLimit = 0
 		}
 		config.Providers[name] = prov
 	}
@@ -139,6 +149,9 @@ func LoadConfig() (*Config, error) {
 		}
 		if config.Inboxes[i].RecentConsolidationInterval == 0 {
 			config.Inboxes[i].RecentConsolidationInterval = 24 * time.Hour
+		}
+		if config.Inboxes[i].MaxRetries == 0 {
+			config.Inboxes[i].MaxRetries = 3
 		}
 	}
 
