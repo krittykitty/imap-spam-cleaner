@@ -263,7 +263,7 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 	return filtered, nil
 }
 
-func extractRelevantHeaders(raw []byte) string {
+func extractRelevantHeaders(raw []byte) map[string]string {
 	end := bytes.Index(raw, []byte("\r\n\r\n"))
 	if end < 0 {
 		end = bytes.Index(raw, []byte("\n\n"))
@@ -282,11 +282,16 @@ func extractRelevantHeaders(raw []byte) string {
 		"Message-ID",
 		"Reply-To",
 		"Sender",
+		"X-Mailer",
+		"User-Agent",
 	}
 
-	var out []string
+	// Map to store extracted headers. For multi-line headers like Received,
+	// we store comma-separated values if multiple occurrences exist.
+	out := make(map[string]string)
 	scanner := bufio.NewScanner(bytes.NewReader(headers))
 	current := ""
+	currentName := ""
 	include := false
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -299,24 +304,45 @@ func extractRelevantHeaders(raw []byte) string {
 			}
 			continue
 		}
-		if include && current != "" {
-			out = append(out, current)
+		// Save the previous header if any
+		if include && current != "" && currentName != "" {
+			// Extract the header value (everything after "HeaderName:").
+			// Keep multi-line values with newlines intact.
+			if existing, exists := out[currentName]; exists && currentName == "Received" {
+				// For Received headers, append with comma separator
+				out[currentName] = existing + ", " + current
+			} else {
+				out[currentName] = current
+			}
 		}
 		include = false
 		current = ""
+		currentName = ""
 		for _, name := range relevant {
 			if strings.HasPrefix(strings.ToLower(line), strings.ToLower(name)+":") {
 				include = true
-				current = line
+				// Extract value part (skip "HeaderName: " or "HeaderName:")
+				colonIdx := strings.Index(line, ":")
+				if colonIdx >= 0 {
+					current = strings.TrimSpace(line[colonIdx+1:])
+				} else {
+					current = line
+				}
+				currentName = name
 				break
 			}
 		}
 	}
-	if include && current != "" {
-		out = append(out, current)
+	// Don't forget the last header
+	if include && current != "" && currentName != "" {
+		if existing, exists := out[currentName]; exists && currentName == "Received" {
+			out[currentName] = existing + ", " + current
+		} else {
+			out[currentName] = current
+		}
 	}
 
-	return strings.Join(out, "\n")
+	return out
 }
 
 func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {

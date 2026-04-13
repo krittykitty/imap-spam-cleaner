@@ -112,6 +112,50 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 	return nil
 }
 
+func (p *AIBase) formatHeaders(hdrs map[string]string) string {
+	if len(hdrs) == 0 {
+		return ""
+	}
+
+	// Define the priority order for headers to appear in the prompt.
+	// Most important trust signals first.
+	priorityOrder := []string{
+		"Authentication-Results",
+		"Return-Path",
+		"Reply-To",
+		"DKIM-Signature",
+		"ARC-Authentication-Results",
+		"Received",
+		"Message-ID",
+		"Sender",
+		"X-Mailer",
+		"User-Agent",
+	}
+
+	var lines []string
+
+	// Add headers in priority order
+	for _, name := range priorityOrder {
+		if value, exists := hdrs[name]; exists && value != "" {
+			// Format as "Header-Name: value"
+			lines = append(lines, name+": "+value)
+		}
+	}
+
+	// Add any remaining headers not in priority order
+	addedHeaders := make(map[string]bool)
+	for _, name := range priorityOrder {
+		addedHeaders[name] = true
+	}
+	for name, value := range hdrs {
+		if !addedHeaders[name] && value != "" {
+			lines = append(lines, name+": "+value)
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 
 	textBody := msg.TextBody
@@ -171,6 +215,9 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		body = textBody
 	}
 
+	// Format headers map into readable string for the template
+	formattedHeaders := p.formatHeaders(msg.Headers)
+
 	var buf bytes.Buffer
 	if err := p.userPrompt.Execute(&buf, TplVars{
 		From:        msg.From,
@@ -179,7 +226,7 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Cc:          msg.Cc,
 		Bcc:         msg.Bcc,
 		Subject:     msg.Subject,
-		Headers:     msg.Headers,
+		Headers:     formattedHeaders,
 		TextBody:    textBody,
 		HtmlBody:    htmlBody,
 		Body:        body,
