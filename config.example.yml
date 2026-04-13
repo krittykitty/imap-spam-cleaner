@@ -1,3 +1,8 @@
+# Storage: per-inbox SQLite files are created under `./storage` by default.
+# Sent contacts DB:  storage/sent_contacts__<host>__<username>__<inbox>.db
+# Recent messages DB: storage/recent_messages__<host>__<username>__<inbox>.db
+# When running in Docker, mount `./storage:/app/storage` and `./checkpoints:/app/checkpoints`
+# to persist memory and checkpoints across restarts.
 logging:
   level: debug                    # logging level (panic, fatal, error, warn, info, debug, trace)
 

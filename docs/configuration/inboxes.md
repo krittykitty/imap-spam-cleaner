@@ -24,6 +24,7 @@
 | `enable_idle`           | boolean  | no       | `false` | Use IMAP IDLE for real-time new-mail detection instead of polling   | `true`            |
 | `idle_timeout`          | duration | no       | `25m`   | How long to hold an IDLE connection before re-issuing it            | `25m`             |
 | `max_retries`           | integer  | no       | `3`     | Maximum retry attempts when provider analysis fails transiently     | `3`               |
+See [Storage & Memory](storage.md) for details about the per-inbox SQLite files used for sent-folder contact memory and recent message consolidations, and how to persist them when running in Docker.
 
 ```yaml
 inboxes:
