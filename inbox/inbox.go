@@ -513,12 +513,12 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 
 			analysis, err = p.Analyze(m)
 		} else {
-				// respect explicit 0 (disable retries) and guard nil pointers
-				maxRetries := 3
-				if inboxCfg.MaxRetries != nil {
-					maxRetries = *inboxCfg.MaxRetries
-				}
-				analysis, err = disp.Analyze(runCtx, m, maxRetries)
+			// respect explicit 0 (disable retries) and guard nil pointers
+			maxRetries := 3
+			if inboxCfg.MaxRetries != nil {
+				maxRetries = *inboxCfg.MaxRetries
+			}
+			analysis, err = disp.Analyze(runCtx, m, maxRetries)
 		}
 
 		if err != nil {
