@@ -105,16 +105,25 @@ func (p *OpenAI) Analyze(msg imap.Message) (AnalysisResponse, error) {
 }
 
 func (p *OpenAI) Consolidate(contextText string) (string, error) {
-	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	// Backward-compatible wrapper: build vars with previous consolidation
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *OpenAI) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
 	if err != nil {
 		return "", err
 	}
 
 	messages := []openai.ChatCompletionMessage{}
-	if p.systemPrompt != "" {
+	systemPrompt := p.systemPrompt
+	if p.consolidationSystemPrompt != "" {
+		systemPrompt = p.consolidationSystemPrompt
+	}
+	if systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: p.systemPrompt,
+			Content: systemPrompt,
 		})
 	}
 	messages = append(messages, openai.ChatCompletionMessage{

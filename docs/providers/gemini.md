@@ -18,6 +18,8 @@ Configuration options:
 
 See [Providers](index.md) for available template variables and default prompt values.
 
+Top-level `defaults` entries (`system_prompt`, `user_prompt`, `consolidation_system_prompt`, `consolidation_user_prompt`, `consolidation_prompt`) are applied to all providers unless overridden. Use keys prefixed with `consolidation_` inside a provider config, such as `consolidation_model`, `consolidation_system_prompt`, `consolidation_user_prompt`, or `consolidation_prompt`, to change only the consolidation run.
+
 Example:
 
 ```yaml

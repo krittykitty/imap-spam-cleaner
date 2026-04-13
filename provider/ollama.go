@@ -102,9 +102,17 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 }
 
 func (p *Ollama) Consolidate(contextText string) (string, error) {
-	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
 	if err != nil {
 		return "", err
+	}
+
+	if p.consolidationSystemPrompt != "" {
+		prompt = p.consolidationSystemPrompt + "\n\n" + prompt
 	}
 
 	b := false

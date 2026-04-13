@@ -112,7 +112,11 @@ func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 }
 
 func (p *Gemini) Consolidate(contextText string) (string, error) {
-	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Gemini) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
 	if err != nil {
 		return "", err
 	}

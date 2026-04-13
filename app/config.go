@@ -15,9 +15,18 @@ const configPath = "config.yml"
 
 type Config struct {
 	Logging    Logging                    `yaml:"logging"    validate:"required"`
+	Defaults   Defaults                   `yaml:"defaults"   validate:"omitempty"`
 	Providers  map[string]Provider        `yaml:"providers"  validate:"required,dive"`
 	Whitelists map[string][]regexp.Regexp `yaml:"whitelists" validate:"omitempty"`
 	Inboxes    []Inbox                    `yaml:"inboxes"    validate:"required,dive"`
+}
+
+type Defaults struct {
+	SystemPrompt              string `yaml:"system_prompt"`
+	UserPrompt                string `yaml:"user_prompt"`
+	ConsolidationSystemPrompt string `yaml:"consolidation_system_prompt"`
+	ConsolidationUserPrompt   string `yaml:"consolidation_user_prompt"`
+	ConsolidationPrompt       string `yaml:"consolidation_prompt"`
 }
 
 type Logging struct {
@@ -66,6 +75,29 @@ func LoadConfig() (*Config, error) {
 	var config Config
 	if err = yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
+	}
+
+	// Apply top-level defaults to providers if not explicitly set
+	for name, prov := range config.Providers {
+		if prov.Config == nil {
+			prov.Config = make(map[string]string)
+		}
+		if config.Defaults.SystemPrompt != "" && prov.Config["system_prompt"] == "" {
+			prov.Config["system_prompt"] = config.Defaults.SystemPrompt
+		}
+		if config.Defaults.UserPrompt != "" && prov.Config["user_prompt"] == "" {
+			prov.Config["user_prompt"] = config.Defaults.UserPrompt
+		}
+		if config.Defaults.ConsolidationSystemPrompt != "" && prov.Config["consolidation_system_prompt"] == "" {
+			prov.Config["consolidation_system_prompt"] = config.Defaults.ConsolidationSystemPrompt
+		}
+		if config.Defaults.ConsolidationUserPrompt != "" && prov.Config["consolidation_user_prompt"] == "" {
+			prov.Config["consolidation_user_prompt"] = config.Defaults.ConsolidationUserPrompt
+		}
+		if config.Defaults.ConsolidationPrompt != "" && prov.Config["consolidation_prompt"] == "" {
+			prov.Config["consolidation_prompt"] = config.Defaults.ConsolidationPrompt
+		}
+		config.Providers[name] = prov
 	}
 
 	if err = validator.New().Struct(&config); err != nil {

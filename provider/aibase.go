@@ -21,12 +21,19 @@ const textBodyDivisor = 4
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
 
 const defaultConsolidationPrompt = `
-Summarize the recent email activity in five sentences.
-Include the normal senders, subjects, and any spam-related signals.
-Use the consolidated context and the recent message metadata to produce a short summary.
-Only return the summary text and no JSON.
+Use the previous consolidation and recent email metadata to create a new concise summary in five sentences.
+Do not include implementation details, JSON, or message IDs.
 
-{{.Context}}
+Previous consolidation:
+{{.PreviousConsolidation}}
+
+Latest senders:
+{{.LatestSenders}}
+
+Recent messages:
+{{range .Messages}}
+- From: {{.From}}, To: {{.To}}, Subject: {{.Subject}}, Score: {{.SpamScore}}, Reason: {{.LLMReason}}
+{{end}}
 `
 
 const defaultUserPrompt = `
@@ -59,6 +66,21 @@ HTML body (converted to Markdown):
 {{.HtmlBody}}
 `
 
+type ConsolidationPromptVars struct {
+	Messages              []ConsolidationMessage
+	LatestSenders         string
+	PreviousConsolidation string
+}
+
+type ConsolidationMessage struct {
+	From      string
+	To        string
+	Subject   string
+	Snippet   string
+	SpamScore string
+	LLMReason string
+}
+
 type AnalysisResponse struct {
 	Score      int    `json:"score"`
 	Reason     string `json:"reason"`
@@ -66,14 +88,16 @@ type AnalysisResponse struct {
 }
 
 type AIBase struct {
-	model               string
-	maxsize             int
-	systemPrompt        string
-	userPrompt          *template.Template
-	consolidationPrompt *template.Template
-	temperature         *float32
-	topP                *float32
-	maxTokens           *int32
+	model                    string
+	maxsize                  int
+	systemPrompt             string
+	userPrompt               *template.Template
+	consolidationSystemPrompt string
+	consolidationUserPrompt  *template.Template
+	consolidationPrompt      *template.Template
+	temperature              *float32
+	topP                     *float32
+	maxTokens                *int32
 }
 
 func (p *AIBase) ValidateConfig(config map[string]string) error {
@@ -105,6 +129,15 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 	p.userPrompt, err = template.New("user_prompt").Parse(userPromptStr)
 	if err != nil {
 		return err
+	}
+
+	p.consolidationSystemPrompt = config["consolidation_system_prompt"]
+
+	if config["consolidation_user_prompt"] != "" {
+		p.consolidationUserPrompt, err = template.New("consolidation_user_prompt").Parse(config["consolidation_user_prompt"])
+		if err != nil {
+			return err
+		}
 	}
 
 	consolidationPromptStr := defaultConsolidationPrompt
@@ -273,8 +306,11 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 	return buf.String(), nil
 }
 
-func (p *AIBase) buildConsolidationPrompt(contextText string) (string, error) {
-	tpl := p.consolidationPrompt
+func (p *AIBase) buildConsolidationPrompt(vars ConsolidationPromptVars) (string, error) {
+	tpl := p.consolidationUserPrompt
+	if tpl == nil {
+		tpl = p.consolidationPrompt
+	}
 	if tpl == nil {
 		var err error
 		tpl, err = template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
@@ -284,7 +320,7 @@ func (p *AIBase) buildConsolidationPrompt(contextText string) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, struct{ Context string }{Context: contextText}); err != nil {
+	if err := tpl.Execute(&buf, vars); err != nil {
 		return "", err
 	}
 

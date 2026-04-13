@@ -6,6 +6,59 @@
 logging:
   level: debug                    # logging level (panic, fatal, error, warn, info, debug, trace)
 
+defaults:
+  system_prompt: |
+    You are a cybersecurity analyst specializing in email fraud.
+    Your goal is to detect spam, phishing, and spoofed senders.
+  user_prompt: |
+    Analyze the following email for its spam score.
+    Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
+    Return a spam score between 0 and 100. Only output the integer.
+
+    Recent context:
+    {{.Context}}
+
+    Headers:
+    {{.Headers}}
+
+    From: {{.From}}
+    To: {{.To}}
+    Delivered-To: {{.DeliveredTo}}
+    Cc: {{.Cc}}
+    Bcc: {{.Bcc}}
+    Subject: {{.Subject}}
+
+    Email body:
+    {{.Body}}
+  consolidation_system_prompt: |
+    You are an email summary assistant. Your goal is to safely consolidate recent inbox activity for later spam analysis.
+    Produce a short summary in five sentences.
+  consolidation_user_prompt: |
+    Create a new concise consolidation from the previous summary and the recent message metadata.
+    Do not output a detailed list of messages, recipients, senders, or headers.
+
+    Previous consolidation: {{.PreviousConsolidation}}
+
+    Latest senders: {{.LatestSenders}}
+
+    Recent messages:
+    {{range .Messages}}
+    - From: {{.From}}, To: {{.To}}, Subject: {{.Subject}}, Score: {{.SpamScore}}, Reason: {{.LLMReason}}
+    {{end}}
+  consolidation_prompt: |
+    Use the previous consolidation and recent messages to create a new concise summary in five sentences.
+    Do not output a detailed list of messages, recipients, senders, or headers.
+    Use the message metadata and the previous consolidation only as background context.
+
+    Previous consolidation: {{.PreviousConsolidation}}
+
+    Latest senders: {{.LatestSenders}}
+
+    Recent messages:
+    {{range .Messages}}
+    - From: {{.From}}, To: {{.To}}, Subject: {{.Subject}}, Score: {{.SpamScore}}, Reason: {{.LLMReason}}
+    {{end}}
+
 providers:                        # providers to be used for inboxes
   prov1:                          # provider name
     type: openai                  # provider type
@@ -15,44 +68,33 @@ providers:                        # providers to be used for inboxes
       maxsize: 100000             # message size limit for prompt (bytes)
       temperature: 0.1            # optional: sampling temperature (0.0-2.0)
       max_tokens: 8               # optional: max tokens in the response
-      system_prompt: |            # optional: system role instructions (persona/rules)
-        You are a cybersecurity analyst specializing in email fraud.
-        Your goal is to detect spam, phishing, and spoofed senders.
-      user_prompt: |              # optional: user role template with email data (replaces legacy "prompt")
-        Analyze the following email for its spam score.
-        Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
-        Return a spam score between 0 and 100. Only output the integer.
-
-        Recent context:
-        {{.Context}}
-
-        Headers:
-        {{.Headers}}
-
-        From: {{.From}}
-        To: {{.To}}
-        Delivered-To: {{.DeliveredTo}}
-        Cc: {{.Cc}}
-        Bcc: {{.Bcc}}
-        Subject: {{.Subject}}
-
-        Email body:
-        {{.Body}}
+      # Optional overrides for spam analysis prompt A:
+      # system_prompt: |
+      #   You are a cybersecurity analyst specializing in email fraud.
+      #   Your goal is to detect spam, phishing, and spoofed senders.
+      # user_prompt: |
+      #   Analyze the following email for its spam score.
+      #   Return a spam score between 0 and 100. Only output the integer.
+      #   ...
+      # Optional consolidation overrides for prompt B:
+      # consolidation_model: gpt-3.5-turbo
+      # consolidation_system_prompt: |
+      #   You are an email summary assistant.
+      #   Produce a short summary of recent messages.
+      # consolidation_user_prompt: |
+      #   Create a new concise consolidation from the previous summary and recent message metadata.
   prov2:                          # provider name
     type: ollama                  # provider type
     config:                       # provider specific configuration
       url: http://127.0.0.1:11434 # url
-      model: gpt-oss:20b          # model to use
+      model: gpt-oss:20b          # model to use for classification
       maxsize: 100000             # message size limit for prompt (bytes)
       # temperature: 0.2          # optional: sampling temperature
       # top_p: 0.95               # optional: nucleus sampling probability
       # max_tokens: 512           # optional: max tokens in the response (maps to num_predict)
-      consolidation_prompt: |     # optional: custom consolidation prompt
-        Summarize the recent email activity into a short report.
-        Include sender patterns, repeat subjects, and spam signals.
-        Use only the consolidated context and do not add extra JSON.
-
-        {{.Context}}
+      # consolidation_model: gpt-oss:7b       # optional: use a different model for consolidation
+      # consolidation_prompt: |              # optional: custom consolidation prompt
+      #   ...
   prov3:                          # provider name
     type: spamassassin            # provider type
     config:                       # provider specific configuration

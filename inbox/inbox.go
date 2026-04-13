@@ -525,13 +525,48 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox, processed
 }
 
 func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
-	recentContext, err := recentStore.GetConsolidatedContext(50, 90*24*time.Hour)
+	// Collect structured recent messages and previous consolidation
+	messages, err := recentStore.GetRecentMessages(50, time.Now().UTC().Add(-90*24*time.Hour))
 	if err != nil {
 		return err
 	}
-
-	if recentContext == "" {
+	prevConsolidation, err := recentStore.GetLatestConsolidation()
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 && prevConsolidation == "" {
 		return nil
+	}
+
+	// Build list of latest senders
+	senderSet := make(map[string]struct{})
+	senderList := make([]string, 0, len(messages))
+	for _, m := range messages {
+		if m.From == "" {
+			continue
+		}
+		if _, ok := senderSet[m.From]; !ok {
+			senderSet[m.From] = struct{}{}
+			senderList = append(senderList, m.From)
+		}
+	}
+	latestSenders := strings.Join(senderList, ", ")
+
+	// Map messages to template struct
+	tplMsgs := make([]provider.ConsolidationMessage, 0, len(messages))
+	for _, m := range messages {
+		score := "n/a"
+		if m.SpamScore != nil {
+			score = fmt.Sprintf("%.1f", *m.SpamScore)
+		}
+		tplMsgs = append(tplMsgs, provider.ConsolidationMessage{
+			From:      m.From,
+			To:        m.To,
+			Subject:   m.Subject,
+			Snippet:   m.Snippet,
+			SpamScore: score,
+			LLMReason: m.LLMReason,
+		})
 	}
 
 	consolidationProvider := prov
@@ -543,24 +578,69 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		consolidationProvider = cp
 	}
 
-	if p == nil || (inboxCfg.ConsolidationProvider != "" && inboxCfg.ConsolidationProvider != inboxCfg.Provider) {
-		p, err = provider.New(consolidationProvider.Type)
+	// Build consolidation config: allow consolidation_ overrides inside provider config
+	consolidationConfig := make(map[string]string)
+	for k, v := range consolidationProvider.Config {
+		// copy base keys, including non-prefixed ones
+		if !strings.HasPrefix(k, "consolidation_") {
+			consolidationConfig[k] = v
+		}
+	}
+	// Apply consolidation_ overrides
+	for k, v := range consolidationProvider.Config {
+		if strings.HasPrefix(k, "consolidation_") {
+			newKey := strings.TrimPrefix(k, "consolidation_")
+			consolidationConfig[newKey] = v
+		}
+	}
+
+	// Decide whether to reuse the analysis provider instance or create a new one
+	var pcons provider.Provider
+	hasOverrides := false
+	for k := range consolidationProvider.Config {
+		if strings.HasPrefix(k, "consolidation_") {
+			hasOverrides = true
+			break
+		}
+	}
+	if !hasOverrides && inboxCfg.ConsolidationProvider == "" && p != nil {
+		// reuse analysis provider instance
+		pcons = p
+	} else {
+		pcons, err = provider.New(consolidationProvider.Type)
 		if err != nil {
 			return err
 		}
-		if err = p.Init(consolidationProvider.Config); err != nil {
+		if err = pcons.Init(consolidationConfig); err != nil {
 			return err
 		}
 	}
 
 	var summary string
-	if consolidator, ok := p.(interface{ Consolidate(string) (string, error) }); ok {
-		summary, err = consolidator.Consolidate(recentContext)
+	// Try new ConsolidateVars API first
+	if consolidator, ok := pcons.(interface {
+		ConsolidateVars(provider.ConsolidationPromptVars) (string, error)
+	}); ok {
+		summary, err = consolidator.ConsolidateVars(provider.ConsolidationPromptVars{
+			Messages:              tplMsgs,
+			LatestSenders:         latestSenders,
+			PreviousConsolidation: prevConsolidation,
+		})
+		if err != nil {
+			return err
+		}
+	} else if consolidator, ok := pcons.(interface{ Consolidate(string) (string, error) }); ok {
+		// fallback to legacy string-based consolidation
+		contextStr, err := recentStore.GetConsolidatedContext(50, 90*24*time.Hour)
+		if err != nil {
+			return err
+		}
+		summary, err = consolidator.Consolidate(contextStr)
 		if err != nil {
 			return err
 		}
 	} else {
-		summary = "Consolidated recent context:\n" + recentContext
+		summary = "Consolidated recent context:\n" + prevConsolidation
 	}
 
 	if summary == "" {
