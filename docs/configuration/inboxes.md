@@ -19,6 +19,8 @@
 | `sent_folder`           | string   | no       | `Sent`  | Folder to scan for outgoing messages when building the contact memory | `Sent`            |
 | `sent_folder_maxage`    | duration | no       | `2160h` | How long to retain sent-folder contacts before pruning              | `2160h`            |
 | `sent_folder_schedule`  | string   | no       | `"0 * * * *"` | Cron schedule for periodic sent-folder sync                 | `"0 * * * *"`   |
+| `recent_consolidation_every` | integer | no | `50` | Run consolidation after this many processed messages | `50` |
+| `recent_consolidation_interval` | duration | no | `24h` | Run consolidation if the last summary is older than this interval | `24h` |
 | `enable_idle`           | boolean  | no       | `false` | Use IMAP IDLE for real-time new-mail detection instead of polling   | `true`            |
 | `idle_timeout`          | duration | no       | `25m`   | How long to hold an IDLE connection before re-issuing it            | `25m`             |
 | `max_retries`           | integer  | no       | `3`     | Maximum retry attempts when provider analysis fails transiently     | `3`               |
@@ -42,6 +44,8 @@ inboxes:
     sent_folder: Sent            # folder to scan for outgoing messages
     sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
     sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
+    # recent_consolidation_every: 50 # run consolidation after this many processed messages
+    # recent_consolidation_interval: 24h # refresh consolidation if older than this interval
     enable_idle: false   # set to true to use IMAP IDLE instead of the cron schedule above
     idle_timeout: 25m    # re-issue IDLE after this duration (keep-alive)
     max_retries: 3       # retry failed analysis jobs up to this many times

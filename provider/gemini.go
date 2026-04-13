@@ -62,11 +62,11 @@ func (p *Gemini) HealthCheck(config map[string]string) error {
 	return checkTCP("generativeai.googleapis.com:443", 5*time.Second)
 }
 
-func (p *Gemini) Analyze(msg imap.Message) (int, error) {
+func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	userContent, err := p.buildUserPrompt(msg)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	cfg := &genai.GenerateContentConfig{}
@@ -93,20 +93,61 @@ func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 	)
 
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	if len(resp.Candidates) == 0 ||
 		len(resp.Candidates[0].Content.Parts) == 0 {
-		return 0, errors.New("empty gemini response")
+		return AnalysisResponse{}, errors.New("empty gemini response")
 	}
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text)
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
-	return res.Score, nil
+	return res, nil
+}
+
+func (p *Gemini) Consolidate(contextText string) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	if err != nil {
+		return "", err
+	}
+
+	cfg := &genai.GenerateContentConfig{}
+	if p.systemPrompt != "" {
+		cfg.SystemInstruction = &genai.Content{
+			Parts: []*genai.Part{{Text: p.systemPrompt}},
+		}
+	}
+	if p.temperature != nil {
+		cfg.Temperature = p.temperature
+	}
+	if p.topP != nil {
+		cfg.TopP = p.topP
+	}
+	if p.maxTokens != nil {
+		cfg.MaxOutputTokens = *p.maxTokens
+	}
+
+	resp, err := p.client.Models.GenerateContent(
+		context.Background(),
+		p.model,
+		genai.Text(prompt),
+		cfg,
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Candidates) == 0 ||
+		len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", errors.New("empty gemini response")
+	}
+
+	return strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text), nil
 }

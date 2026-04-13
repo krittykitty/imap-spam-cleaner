@@ -51,11 +51,11 @@ func (p *OpenAI) HealthCheck(config map[string]string) error {
 	return checkTCP("api.openai.com:443", 5*time.Second)
 }
 
-func (p *OpenAI) Analyze(msg imap.Message) (int, error) {
+func (p *OpenAI) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	userContent, err := p.buildUserPrompt(msg)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	messages := []openai.ChatCompletionMessage{}
@@ -87,19 +87,63 @@ func (p *OpenAI) Analyze(msg imap.Message) (int, error) {
 	resp, err := p.client.CreateChatCompletion(context.Background(), req)
 
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	if len(resp.Choices) == 0 {
-		return 0, errors.New("empty openai response")
+		return AnalysisResponse{}, errors.New("empty openai response")
 	}
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
-	return res.Score, nil
+	return res, nil
+}
+
+func (p *OpenAI) Consolidate(contextText string) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	if err != nil {
+		return "", err
+	}
+
+	messages := []openai.ChatCompletionMessage{}
+	if p.systemPrompt != "" {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: p.systemPrompt,
+		})
+	}
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	req := openai.ChatCompletionRequest{
+		Model:    p.model,
+		Messages: messages,
+	}
+	if p.temperature != nil {
+		req.Temperature = *p.temperature
+	}
+	if p.topP != nil {
+		req.TopP = *p.topP
+	}
+	if p.maxTokens != nil {
+		req.MaxCompletionTokens = int(*p.maxTokens)
+	}
+
+	resp, err := p.client.CreateChatCompletion(context.Background(), req)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", errors.New("empty openai response")
+	}
+
+	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }

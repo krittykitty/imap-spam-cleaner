@@ -20,6 +20,15 @@ const textBodyDivisor = 4
 
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
 
+const defaultConsolidationPrompt = `
+Summarize the recent email activity in five sentences.
+Include the normal senders, subjects, and any spam-related signals.
+Use the consolidated context and the recent message metadata to produce a short summary.
+Only return the summary text and no JSON.
+
+{{.Context}}
+`
+
 const defaultUserPrompt = `
 Analyze the following email for its spam potential.
 Return your analysis as a JSON object with the following fields:
@@ -29,6 +38,9 @@ Return your analysis as a JSON object with the following fields:
   "is_phishing": <bool>
 }
 Only return the JSON. No other text.
+
+Recent context:
+{{.Context}}
 
 Headers:
 {{.Headers}}
@@ -209,6 +221,15 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		}
 	}
 
+	body := htmlBody
+	if body == "" {
+		body = textBody
+	}
+
+	formattedHeaders := p.formatHeaders(msg.Headers)
+
+	var buf bytes.Buffer
+
 	type TplVars struct {
 		From        string
 		To          string
@@ -220,17 +241,9 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		TextBody    string
 		HtmlBody    string
 		Body        string
+		Context     string
 	}
 
-	body := htmlBody
-	if body == "" {
-		body = textBody
-	}
-
-	// Format headers map into readable string for the template
-	formattedHeaders := p.formatHeaders(msg.Headers)
-
-	var buf bytes.Buffer
 	if err := p.userPrompt.Execute(&buf, TplVars{
 		From:        msg.From,
 		To:          msg.To,
@@ -242,8 +255,23 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		TextBody:    textBody,
 		HtmlBody:    htmlBody,
 		Body:        body,
+		Context:     msg.Context,
 	}); err != nil {
 		return "", errors.New("user_prompt template error: " + err.Error())
+	}
+
+	return buf.String(), nil
+}
+
+func (p *AIBase) buildConsolidationPrompt(contextText string) (string, error) {
+	tpl, err := template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, struct{ Context string }{Context: contextText}); err != nil {
+		return "", err
 	}
 
 	return buf.String(), nil

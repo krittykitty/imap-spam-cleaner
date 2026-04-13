@@ -69,11 +69,11 @@ func (p *Ollama) HealthCheck(config map[string]string) error {
 	return checkTCP(net.JoinHostPort(host, port), 5*time.Second)
 }
 
-func (p *Ollama) Analyze(msg imap.Message) (int, error) {
+func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	prompt, err := p.AIBase.buildPrompt(msg)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	b := false
@@ -88,15 +88,39 @@ func (p *Ollama) Analyze(msg imap.Message) (int, error) {
 		resp = response.Response
 		return nil
 	}); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp)
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
-	return res.Score, nil
+	return res, nil
+}
+
+func (p *Ollama) Consolidate(contextText string) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(contextText)
+	if err != nil {
+		return "", err
+	}
+
+	b := false
+	req := api.GenerateRequest{
+		Model:  p.model,
+		Prompt: prompt,
+		Stream: &b,
+	}
+
+	var resp string
+	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
+		resp = response.Response
+		return nil
+	}); err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(resp), nil
 }

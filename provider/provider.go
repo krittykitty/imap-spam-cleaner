@@ -13,7 +13,7 @@ type Provider interface {
 	Init(config map[string]string) error
 	ValidateConfig(config map[string]string) error
 	HealthCheck(config map[string]string) error
-	Analyze(message imap.Message) (int, error)
+	Analyze(message imap.Message) (AnalysisResponse, error)
 }
 
 func checkTCP(addr string, timeout time.Duration) error {
