@@ -37,7 +37,13 @@ providers:
       user_prompt: |
         Analyze the following email for its spam score.
         Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
-        Return a spam score between 0 and 100. Only output the integer.
+        Return your analysis as a JSON object with the following fields:
+        {
+          "score": <int 0-100>,
+          "reason": "<short explanation of why this score was given>",
+          "is_phishing": <bool>
+        }
+        Only return the JSON. No other text.
 
         Recent context:
         {{.Context}}

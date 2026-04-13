@@ -370,6 +370,11 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			LastUID:     uint32(maxUID),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint: %v\n", err)
+		} else {
+			// attempt to seed recent-message memory on first run; non-fatal
+			if err := initialPopulation(appCtx, inboxCfg); err != nil {
+				logx.Errorf("Initial population failed for %s: %v", inboxCfg.Username, err)
+			}
 		}
 		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d)", maxUID, currentUIDValidity)
 		return
@@ -508,7 +513,12 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 
 			analysis, err = p.Analyze(m)
 		} else {
-			analysis, err = disp.Analyze(runCtx, m, inboxCfg.MaxRetries)
+				// respect explicit 0 (disable retries) and guard nil pointers
+				maxRetries := 3
+				if inboxCfg.MaxRetries != nil {
+					maxRetries = *inboxCfg.MaxRetries
+				}
+				analysis, err = disp.Analyze(runCtx, m, maxRetries)
 		}
 
 		if err != nil {

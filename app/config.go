@@ -65,7 +65,7 @@ type Inbox struct {
 	RecentConsolidationEvery    int           `yaml:"recent_consolidation_every" validate:"omitempty,min=1"`
 	RecentConsolidationInterval time.Duration `yaml:"recent_consolidation_interval" validate:"omitempty"`
 	ConsolidationProvider       string        `yaml:"consolidation_provider" validate:"omitempty"`
-	MaxRetries                  int           `yaml:"max_retries" validate:"omitempty,min=0"`
+	MaxRetries                  *int          `yaml:"max_retries" validate:"omitempty,min=0"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -150,8 +150,9 @@ func LoadConfig() (*Config, error) {
 		if config.Inboxes[i].RecentConsolidationInterval == 0 {
 			config.Inboxes[i].RecentConsolidationInterval = 24 * time.Hour
 		}
-		if config.Inboxes[i].MaxRetries == 0 {
-			config.Inboxes[i].MaxRetries = 3
+		if config.Inboxes[i].MaxRetries == nil {
+			v := 3
+			config.Inboxes[i].MaxRetries = &v
 		}
 	}
 
