@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,14 +24,26 @@ func Schedule(ctx app.Context) {
 		return
 	}
 
+	shutdownCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	jobs := 0
+	idleCount := 0
 	for i, inbox := range ctx.Config.Inboxes {
-		logx.Infof("Scheduling inbox %s (%s)", inbox.Username, inbox.Schedule)
 		prov, ok := ctx.Config.Providers[inbox.Provider]
 		if !ok {
 			logx.Errorf("Invalid provider %s for inbox %d", inbox.Provider, i)
 			continue
 		}
+
+		if inbox.EnableIdle {
+			logx.Infof("Skipping cron for idle inbox %s", inbox.Username)
+			go StartIdle(shutdownCtx, ctx, inbox, prov)
+			idleCount++
+			continue
+		}
+
+		logx.Infof("Scheduling inbox %s (%s)", inbox.Username, inbox.Schedule)
 		if _, err = s.NewJob(
 			gocron.CronJob(inbox.Schedule, false),
 			gocron.NewTask(processInbox, ctx, inbox, prov),
@@ -41,7 +54,7 @@ func Schedule(ctx app.Context) {
 		jobs++
 	}
 
-	logx.Debugf("Scheduled %d inbox jobs", jobs)
+	logx.Debugf("Scheduled %d inbox jobs, started %d IDLE watchers", jobs, idleCount)
 	logx.Debugf("Starting scheduler")
 	s.Start()
 	logx.Debugf("Scheduler started")
@@ -50,6 +63,8 @@ func Schedule(ctx app.Context) {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	sig := <-ch
 	logx.Debugf("Received %s, shutting down", sig.String())
+
+	cancel()
 
 	if err = s.Shutdown(); err != nil {
 		logx.Errorf("Could not shutdown scheduler: %v ", err)
