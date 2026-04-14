@@ -493,10 +493,12 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 	moved := 0
 	processedUIDs := make([]uint32, 0, len(msgs))
 	skippedUIDs := make([]uint32, 0, len(msgs))
+	skippedReasons := make(map[uint32]string)
 	for _, m := range msgs {
 		if mgr.IsAlreadyProcessed(uint32(m.UID)) {
 			logx.Debugf("Skipping already processed message by checkpoint #%d (%s)", m.UID, m.Subject)
 			skippedUIDs = append(skippedUIDs, uint32(m.UID))
+			skippedReasons[uint32(m.UID)] = "already processed by checkpoint"
 			continue
 		}
 
@@ -508,6 +510,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		if !marked {
 			logx.Debugf("Skipping already processed message by uid marker #%d (%s)", m.UID, m.Subject)
 			skippedUIDs = append(skippedUIDs, uint32(m.UID))
+			skippedReasons[uint32(m.UID)] = "already processed by uid marker"
 			continue
 		}
 
@@ -535,6 +538,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 				storeRecentMessage(m)
 				logx.Debugf("Skipping message #%d (%s) because of trusted sender (%s)", m.UID, m.Subject, m.From)
 				skippedUIDs = append(skippedUIDs, uint32(m.UID))
+				skippedReasons[uint32(m.UID)] = "whitelisted by trusted sender pattern"
 				continue
 			}
 		}
@@ -551,6 +555,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 					storeRecentMessage(m)
 					logx.Debugf("Skipping message #%d (%s) because sender %s is in sent-folder contact memory", m.UID, m.Subject, m.From)
 					skippedUIDs = append(skippedUIDs, uint32(m.UID))
+					skippedReasons[uint32(m.UID)] = "whitelisted by sent-folder contact memory"
 					continue
 				}
 			}
@@ -599,7 +604,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		m.LLMReason = analysis.Reason
 		m.Whitelisted = false
 		storeRecentMessage(m)
-		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, analysis.Score)
+		logx.Infof("Spam score for message #%d: %d/100; From=%s; Subject=%s; Reason=%s", m.UID, analysis.Score, m.From, m.Subject, analysis.Reason)
 
 		if analysis.Score >= inboxCfg.MinScore {
 			if appCtx.Options.AnalyzeOnly {
@@ -621,7 +626,13 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		logx.Debugf("Processed message UIDs: %v", processedUIDs)
 	}
 	if len(skippedUIDs) > 0 {
-		logx.Debugf("Skipped message UIDs: %v", skippedUIDs)
+		// Build human-readable list with reasons
+		entries := make([]string, 0, len(skippedUIDs))
+		for _, uid := range skippedUIDs {
+			reason := skippedReasons[uid]
+			entries = append(entries, fmt.Sprintf("%d (%s)", uid, reason))
+		}
+		logx.Infof("Skipped message UIDs: %s", strings.Join(entries, ", "))
 	}
 	if recentStore != nil && shouldRunConsolidation(recentStore, inboxCfg, len(processedUIDs)) {
 		if err := runConsolidation(appCtx, inboxCfg, recentStore, p, prov); err != nil {
@@ -814,7 +825,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		if len(preview) > 500 {
 			preview = preview[:500]
 		}
-		logx.Debugf("Consolidation result for %s: %d bytes; preview: %s", inboxCfg.Username, len(summary), preview)
+		logx.Infof("Consolidation result for %s: %d bytes; preview: %s", inboxCfg.Username, len(summary), preview)
 	}
 
 	if err := recentStore.SaveConsolidation(summary); err != nil {
