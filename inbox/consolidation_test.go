@@ -64,3 +64,33 @@ func TestRunConsolidationWithFakeProvider(t *testing.T) {
 		t.Fatalf("unexpected consolidation summary: %q", summary)
 	}
 }
+
+func TestShouldRunConsolidationWhenNoSummaryExists(t *testing.T) {
+	dir := filepath.Join("testdata", "consolidation")
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+
+	dbPath := filepath.Join(dir, "recent.db")
+	st, err := storage.NewRecent(dbPath)
+	if err != nil {
+		t.Fatalf("NewRecent failed: %v", err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	if err := st.UpsertMessage(storage.RecentMessage{
+		UID:         1,
+		From:        "alice@example.com",
+		To:          "bob@example.com",
+		Subject:     "Test",
+		Snippet:     "snippet",
+		Date:        now,
+		Whitelisted: false,
+	}); err != nil {
+		t.Fatalf("UpsertMessage failed: %v", err)
+	}
+
+	if !shouldRunConsolidation(st, app.Inbox{RecentConsolidationEvery: 50}) {
+		t.Fatal("expected consolidation to run when no summary exists")
+	}
+}

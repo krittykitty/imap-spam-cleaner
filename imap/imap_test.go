@@ -1,7 +1,10 @@
 package imap
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/emersion/go-imap/v2"
 )
 
 func TestExtractRelevantHeaders(t *testing.T) {
@@ -123,6 +126,76 @@ Body`),
 				}
 			}
 		})
+	}
+}
+
+func TestFilterUIDsAfter(t *testing.T) {
+	tests := []struct {
+		name     string
+		uids     []imap.UID
+		sinceUID imap.UID
+		expected []imap.UID
+	}{
+		{
+			name:     "filter out non-new UIDs",
+			uids:     []imap.UID{25822, 25823, 25824},
+			sinceUID: 25822,
+			expected: []imap.UID{25823, 25824},
+		},
+		{
+			name:     "no uids greater than sinceUID",
+			uids:     []imap.UID{1, 2, 3},
+			sinceUID: 3,
+			expected: []imap.UID{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterUIDsAfter(tt.uids, tt.sinceUID)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Fatalf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestFindMailbox(t *testing.T) {
+	i := &Imap{mailboxes: []string{"INBOX", "INBOX.Spam", "[Gmail]/Spam", "Junk Mail"}}
+
+	tests := []struct {
+		name       string
+		query      string
+		expected   string
+		shouldFind bool
+	}{
+		{name: "exact spam folder", query: "INBOX.Spam", expected: "INBOX.Spam", shouldFind: true},
+		{name: "case-insensitive alias", query: "junk mail", expected: "Junk Mail", shouldFind: true},
+		{name: "missing folder", query: "Spam2", expected: "", shouldFind: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual, ok := i.FindMailbox(tt.query)
+			if ok != tt.shouldFind {
+				t.Fatalf("expected found=%v, got=%v", tt.shouldFind, ok)
+			}
+			if actual != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, actual)
+			}
+		})
+	}
+}
+
+func TestDetectSpamMailbox(t *testing.T) {
+	i := &Imap{mailboxes: []string{"INBOX", "Spam", "Junk Mail"}}
+
+	mailbox, ok := i.DetectSpamMailbox()
+	if !ok {
+		t.Fatal("expected spam mailbox to be detected")
+	}
+	if mailbox != "Spam" {
+		t.Fatalf("expected Spam, got %q", mailbox)
 	}
 }
 

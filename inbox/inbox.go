@@ -363,6 +363,16 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 	}
 	defer im.Close()
 
+	spamFolder := inboxCfg.Spam
+	if actual, ok := im.FindMailbox(inboxCfg.Spam); ok {
+		spamFolder = actual
+	} else if detected, ok := im.DetectSpamMailbox(); ok {
+		logx.Warnf("Configured spam mailbox %q not found among available mailboxes; auto-selecting detected spam mailbox %q", inboxCfg.Spam, detected)
+		spamFolder = detected
+	} else {
+		logx.Warnf("Configured spam mailbox %q not found among available mailboxes; message moves may fail", inboxCfg.Spam)
+	}
+
 	recentPath := storage.RecentDBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
 	recentStore, err = storage.NewRecent(recentPath)
 	if err != nil {
@@ -613,7 +623,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			if appCtx.Options.AnalyzeOnly {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
-				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {
+				if err = im.MoveMessage(m.UID, spamFolder); err != nil {
 					logx.Errorf("Could not move message #%d (%s): %v\n", m.UID, m.Subject, err)
 					logx.Infof("Continuing after failed move for UID %d (marked processed, will not retry)", m.UID)
 					processedUIDs = append(processedUIDs, uint32(m.UID))
@@ -667,6 +677,16 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox) bool {
 		return false
 	}
 	if pending <= 0 {
+		// If there are no pending messages, still run consolidation when this
+		// inbox has stored recent messages but no consolidation summary yet.
+		summary, err := store.GetLatestConsolidation()
+		if err != nil {
+			logx.Errorf("Could not read latest consolidation summary: %v", err)
+			return false
+		}
+		if summary == "" {
+			return true
+		}
 		return false
 	}
 

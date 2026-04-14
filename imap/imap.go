@@ -23,6 +23,7 @@ type Imap struct {
 	client      *imapclient.Client
 	cfg         app.Inbox
 	uidValidity uint32
+	mailboxes   []string
 }
 
 func New(cfg app.Inbox) (*Imap, error) {
@@ -58,6 +59,7 @@ func New(cfg app.Inbox) (*Imap, error) {
 	logx.Debug("Available mailboxes:")
 	for _, l := range mailboxes {
 		logx.Debugf("  - %s", l.Mailbox)
+		i.mailboxes = append(i.mailboxes, l.Mailbox)
 	}
 
 	mbox, err := i.client.Select(cfg.Inbox, nil).Wait()
@@ -74,6 +76,68 @@ func New(cfg app.Inbox) (*Imap, error) {
 // GetUIDValidity returns the UIDVALIDITY value of the selected mailbox.
 func (i *Imap) GetUIDValidity() uint32 {
 	return i.uidValidity
+}
+
+func (i *Imap) Mailboxes() []string {
+	mailboxes := make([]string, len(i.mailboxes))
+	copy(mailboxes, i.mailboxes)
+	return mailboxes
+}
+
+func (i *Imap) FindMailbox(name string) (string, bool) {
+	norm := normalizeMailboxName(name)
+	if norm == "" {
+		return "", false
+	}
+	for _, mailbox := range i.mailboxes {
+		if normalizeMailboxName(mailbox) == norm {
+			return mailbox, true
+		}
+	}
+	return "", false
+}
+
+func (i *Imap) DetectSpamMailbox() (string, bool) {
+	candidates := []string{
+		"spam",
+		"inbox.spam",
+		"[gmail]/spam",
+		"[google mail]/spam",
+		"junk",
+		"junk mail",
+		"junk e-mail",
+		"bulk mail",
+		"bulk",
+		"clutter",
+	}
+	for _, candidate := range candidates {
+		if mailbox, ok := i.FindMailbox(candidate); ok {
+			return mailbox, true
+		}
+	}
+	return "", false
+}
+
+func normalizeMailboxName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func filterUIDsAfter(uids []imap.UID, sinceUID imap.UID) []imap.UID {
+	filtered := make([]imap.UID, 0, len(uids))
+	for _, uid := range uids {
+		if uid > sinceUID {
+			filtered = append(filtered, uid)
+		}
+	}
+	return filtered
+}
+
+func uidsToUIDSet(uids []imap.UID) imap.UIDSet {
+	uidSet := imap.UIDSet{}
+	for _, uid := range uids {
+		uidSet.AddNum(uid)
+	}
+	return uidSet
 }
 
 // GetMaxUID returns the highest UID present in the mailbox, or 0 if empty.
@@ -119,8 +183,9 @@ func (i *Imap) LoadHeaders(sinceUID imap.UID) ([]Message, error) {
 		return nil, fmt.Errorf("could not search UIDs: %w", err)
 	}
 
-	logx.Debugf("Found %d new UIDs since UID %d", len(uidRes.AllUIDs()), sinceUID)
-	if len(uidRes.AllUIDs()) == 0 {
+	uids := filterUIDsAfter(uidRes.AllUIDs(), sinceUID)
+	logx.Debugf("Found %d new UIDs since UID %d", len(uids), sinceUID)
+	if len(uids) == 0 {
 		return nil, nil
 	}
 
@@ -134,7 +199,8 @@ func (i *Imap) LoadHeaders(sinceUID imap.UID) ([]Message, error) {
 		}},
 	}
 
-	msgs, err = i.client.Fetch(uidRes.All, fetchOptions).Collect()
+	uidSet := uidsToUIDSet(uids)
+	msgs, err = i.client.Fetch(uidSet, fetchOptions).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch headers: %w", err)
 	}
@@ -235,8 +301,9 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		return nil, fmt.Errorf("could not search UIDs: %w", err)
 	}
 
-	logx.Debugf("Found %d new UIDs since UID %d", len(uidRes.AllUIDs()), sinceUID)
-	if len(uidRes.AllUIDs()) == 0 {
+	uids := filterUIDsAfter(uidRes.AllUIDs(), sinceUID)
+	logx.Debugf("Found %d new UIDs since UID %d", len(uids), sinceUID)
+	if len(uids) == 0 {
 		return nil, nil
 	}
 
@@ -257,7 +324,8 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		},
 	}
 
-	msgs, err = i.client.Fetch(uidRes.All, fetchOptions).Collect()
+	uidSet := uidsToUIDSet(uids)
+	msgs, err = i.client.Fetch(uidSet, fetchOptions).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch messages: %w", err)
 	}
