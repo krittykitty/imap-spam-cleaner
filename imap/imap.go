@@ -92,6 +92,111 @@ func (i *Imap) GetMaxUID() (imap.UID, error) {
 	return uids[len(uids)-1], nil
 }
 
+func (i *Imap) LoadHeaders(sinceUID imap.UID) ([]Message, error) {
+	var err error
+	var msgs []*imapclient.FetchMessageBuffer
+	var mr *mail.Reader
+	var messages []Message
+
+	searchCrit := &imap.SearchCriteria{}
+	if i.cfg.MinAge > 0 {
+		searchCrit.Before = time.Now().Add(-i.cfg.MinAge)
+	}
+	if i.cfg.MaxAge > 0 {
+		searchCrit.Since = time.Now().Add(-i.cfg.MaxAge)
+	}
+
+	startUID := sinceUID + 1
+	if startUID == 0 {
+		return nil, nil
+	}
+	var uidRangeSet imap.UIDSet
+	uidRangeSet.AddRange(startUID, 0)
+	searchCrit.UID = append(searchCrit.UID, uidRangeSet)
+
+	uidRes, err := i.client.UIDSearch(searchCrit, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("could not search UIDs: %w", err)
+	}
+
+	logx.Debugf("Found %d new UIDs since UID %d", len(uidRes.AllUIDs()), sinceUID)
+	if len(uidRes.AllUIDs()) == 0 {
+		return nil, nil
+	}
+
+	fetchOptions := &imap.FetchOptions{
+		Envelope:     true,
+		InternalDate: true,
+		UID:          true,
+		BodySection: []*imap.FetchItemBodySection{{
+			Specifier: imap.PartSpecifierHeader,
+			Peek:      true,
+		}},
+	}
+
+	msgs, err = i.client.Fetch(uidRes.All, fetchOptions).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch headers: %w", err)
+	}
+
+	for _, msg := range msgs {
+		var headerBytes []byte
+		for _, buf := range msg.BodySection {
+			switch buf.Section.Specifier {
+			case imap.PartSpecifierHeader:
+				headerBytes = buf.Bytes
+			}
+		}
+		if len(headerBytes) == 0 {
+			continue
+		}
+
+		b := headerBytes
+		mr, err = mail.CreateReader(bytes.NewReader(b))
+		if err != nil {
+			logx.Warnf("failed to create header reader (msg.UID=%d): %v\n", msg.UID, err)
+			continue
+		}
+
+		message := Message{
+			UID:         msg.UID,
+			DeliveredTo: mr.Header.Get("Delivered-To"),
+			From:        mr.Header.Get("From"),
+			To:          mr.Header.Get("To"),
+			Cc:          mr.Header.Get("Cc"),
+			Bcc:         mr.Header.Get("Bcc"),
+			Subject:     msg.Envelope.Subject,
+			Headers:     extractRelevantHeaders(b),
+		}
+
+		if message.Date, err = mr.Header.Date(); err != nil {
+			logx.Debugf("failed to parse Date header, falling back to INTERNALDATE (msg.UID=%d): %v", msg.UID, err)
+			message.Date = msg.InternalDate
+		} else if message.Date.IsZero() {
+			logx.Debugf("message has no Date header, falling back to INTERNALDATE (msg.UID=%d)", msg.UID)
+			message.Date = msg.InternalDate
+		}
+
+		messages = append(messages, message)
+	}
+
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].UID < messages[j].UID
+	})
+
+	filtered := make([]Message, 0, len(messages))
+	seen := make(map[uint32]struct{}, len(messages))
+	for _, message := range messages {
+		if _, ok := seen[uint32(message.UID)]; ok {
+			continue
+		}
+		seen[uint32(message.UID)] = struct{}{}
+		filtered = append(filtered, message)
+	}
+
+	return filtered, nil
+}
+
 func (i *Imap) Close() {
 	if i.client != nil {
 		i.client.Logout()
@@ -205,10 +310,168 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 			message.Date = msg.InternalDate
 		}
 
-		if i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge)) || i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge)) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d)", msg.UID)
+		for {
+			p, err = mr.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				logx.Warnf("failed to read message part (msg.UID=%d): %v\n", msg.UID, err)
+				break
+			}
+
+			switch p.Header.(type) {
+			case *mail.InlineHeader:
+				if b, err = io.ReadAll(p.Body); err != nil {
+					logx.Warnf("failed to read message body (msg.UID=%d): %v\n", msg.UID, err)
+					break
+				}
+				message.Contents = append(message.Contents, string(b))
+
+				mediaType := "text/plain"
+				if ctype := p.Header.Get("Content-Type"); ctype != "" {
+					if mt, _, err := mime.ParseMediaType(ctype); err == nil {
+						mediaType = strings.ToLower(mt)
+					}
+				}
+
+				switch mediaType {
+				case "text/html":
+					message.HtmlBody += string(b) + "\n"
+				default:
+					message.TextBody += string(b) + "\n"
+				}
+			}
+		}
+
+		messages = append(messages, message)
+	}
+
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].UID < messages[j].UID
+	})
+
+	filtered := make([]Message, 0, len(messages))
+	seen := make(map[uint32]struct{}, len(messages))
+	for _, message := range messages {
+		if _, ok := seen[uint32(message.UID)]; ok {
 			continue
 		}
+		seen[uint32(message.UID)] = struct{}{}
+		filtered = append(filtered, message)
+	}
+
+	return filtered, nil
+}
+
+func (i *Imap) GetLastUIDs(maxMessages int) ([]imap.UID, error) {
+	uidRes, err := i.client.UIDSearch(&imap.SearchCriteria{}, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("could not search UIDs: %w", err)
+	}
+
+	uids := uidRes.AllUIDs()
+	if maxMessages > 0 && len(uids) > maxMessages {
+		uids = uids[len(uids)-maxMessages:]
+	}
+	return uids, nil
+}
+
+func (i *Imap) LoadMessagesByUIDs(uids []imap.UID) ([]Message, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+
+	var err error
+	var msgs []*imapclient.FetchMessageBuffer
+	var mr *mail.Reader
+	var p *mail.Part
+	var messages []Message
+
+	// Note: LoadMessagesByUIDs fetches specific UIDs without date filtering.
+	// Date filters (MinAge/MaxAge) are not applied here because we are loading
+	// explicitly requested UIDs, which should always be loaded regardless of date.
+	searchCrit := &imap.SearchCriteria{}
+
+	var uidSet imap.UIDSet
+	for _, uid := range uids {
+		uidSet.AddNum(uid)
+	}
+	searchCrit.UID = append(searchCrit.UID, uidSet)
+
+	uidRes, err := i.client.UIDSearch(searchCrit, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("could not search UIDs: %w", err)
+	}
+
+	resultUIDs := uidRes.AllUIDs()
+	logx.Debugf("LoadMessagesByUIDs: requested %d UIDs, server returned %d UIDs", len(uids), len(resultUIDs))
+	if len(resultUIDs) == 0 {
+		return nil, nil
+	}
+
+	fetchOptions := &imap.FetchOptions{
+		Envelope:     true,
+		InternalDate: true,
+		UID:          true,
+		BodySection: []*imap.FetchItemBodySection{
+			{
+				Specifier: imap.PartSpecifierHeader,
+				Peek:      true,
+			},
+			{
+				Specifier: imap.PartSpecifierText,
+				Peek:      true,
+			},
+		},
+	}
+
+	msgs, err = i.client.Fetch(uidRes.All, fetchOptions).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch messages: %w", err)
+	}
+
+	for _, msg := range msgs {
+		var headerBytes, textBytes []byte
+		for _, buf := range msg.BodySection {
+			switch buf.Section.Specifier {
+			case imap.PartSpecifierHeader:
+				headerBytes = buf.Bytes
+			case imap.PartSpecifierText:
+				textBytes = buf.Bytes
+			}
+		}
+		b := append(headerBytes, textBytes...)
+
+		mr, err = mail.CreateReader(bytes.NewReader(b))
+		if err != nil {
+			logx.Warnf("failed to create message reader (msg.UID=%d): %v\n", msg.UID, err)
+			continue
+		}
+
+		message := Message{
+			UID:         msg.UID,
+			DeliveredTo: mr.Header.Get("Delivered-To"),
+			From:        mr.Header.Get("From"),
+			To:          mr.Header.Get("To"),
+			Cc:          mr.Header.Get("Cc"),
+			Bcc:         mr.Header.Get("Bcc"),
+			Subject:     msg.Envelope.Subject,
+			Contents:    []string{},
+			TextBody:    "",
+			HtmlBody:    "",
+			Raw:         b,
+			Headers:     extractRelevantHeaders(b),
+		}
+
+		if message.Date, err = mr.Header.Date(); err != nil {
+			logx.Debugf("failed to parse Date header, falling back to INTERNALDATE (msg.UID=%d): %v", msg.UID, err)
+			message.Date = msg.InternalDate
+		} else if message.Date.IsZero() {
+			logx.Debugf("message has no Date header, falling back to INTERNALDATE (msg.UID=%d)", msg.UID)
+			message.Date = msg.InternalDate
+		}
+
+		// Note: No date filtering in LoadMessagesByUIDs; requested UIDs are always loaded.
 
 		for {
 			p, err = mr.NextPart()
@@ -263,21 +526,6 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 	return filtered, nil
 }
 
-// RelevantHeaders is the ordered list of header names extracted for spam analysis.
-var RelevantHeaders = []string{
-	"Authentication-Results",
-	"DKIM-Signature",
-	"ARC-Authentication-Results",
-	"Received",
-	"Return-Path",
-	"Message-ID",
-	"Reply-To",
-	"Sender",
-}
-
-// extractRelevantHeaders parses the raw message bytes and returns a
-// map[string]string of the headers listed in RelevantHeaders.  When a header
-// appears more than once (e.g. Received) its values are joined with "\n".
 func extractRelevantHeaders(raw []byte) map[string]string {
 	end := bytes.Index(raw, []byte("\r\n\r\n"))
 	if end < 0 {
@@ -288,11 +536,26 @@ func extractRelevantHeaders(raw []byte) map[string]string {
 	}
 
 	headers := raw[:end]
-	result := make(map[string]string, len(RelevantHeaders))
+	relevant := []string{
+		"Authentication-Results",
+		"DKIM-Signature",
+		"ARC-Authentication-Results",
+		"Received",
+		"Return-Path",
+		"Message-ID",
+		"Reply-To",
+		"Sender",
+		"X-Mailer",
+		"User-Agent",
+	}
 
+	// Map to store extracted headers. For multi-line headers like Received,
+	// we store comma-separated values if multiple occurrences exist.
+	out := make(map[string]string)
 	scanner := bufio.NewScanner(bytes.NewReader(headers))
+	current := ""
 	currentName := ""
-	currentValue := ""
+	include := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -305,34 +568,45 @@ func extractRelevantHeaders(raw []byte) map[string]string {
 			}
 			continue
 		}
-		// Flush the previous header before starting a new one.
-		if currentName != "" {
-			if existing, ok := result[currentName]; ok {
-				result[currentName] = existing + "\n" + currentValue
+		// Save the previous header if any
+		if include && current != "" && currentName != "" {
+			// Extract the header value (everything after "HeaderName:").
+			// Keep multi-line values with newlines intact.
+			if existing, exists := out[currentName]; exists && currentName == "Received" {
+				// For Received headers, append with comma separator
+				out[currentName] = existing + ", " + current
 			} else {
-				result[currentName] = currentValue
+				out[currentName] = current
 			}
-			currentName = ""
-			currentValue = ""
 		}
-		for _, name := range RelevantHeaders {
+		include = false
+		current = ""
+		currentName = ""
+		for _, name := range relevant {
 			if strings.HasPrefix(strings.ToLower(line), strings.ToLower(name)+":") {
+				include = true
+				// Extract value part (skip "HeaderName: " or "HeaderName:")
+				colonIdx := strings.Index(line, ":")
+				if colonIdx >= 0 {
+					current = strings.TrimSpace(line[colonIdx+1:])
+				} else {
+					current = line
+				}
 				currentName = name
-				currentValue = strings.TrimSpace(line[len(name)+1:])
 				break
 			}
 		}
 	}
-	// Flush the last header.
-	if currentName != "" {
-		if existing, ok := result[currentName]; ok {
-			result[currentName] = existing + "\n" + currentValue
+	// Don't forget the last header
+	if include && current != "" && currentName != "" {
+		if existing, exists := out[currentName]; exists && currentName == "Received" {
+			out[currentName] = existing + ", " + current
 		} else {
-			result[currentName] = currentValue
+			out[currentName] = current
 		}
 	}
 
-	return result
+	return out
 }
 
 func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {

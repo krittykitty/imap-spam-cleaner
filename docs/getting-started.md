@@ -24,7 +24,13 @@ providers:                        # providers to be used for inboxes
       maxsize: 100000             # message size limit for prompt (bytes)
       prompt: |                   # prompt to be sent to the model
         Analyze the following email for its spam potential.
-        Return a spam score between 0 and 100. Only answer with the number itself.
+        Return your analysis as a JSON object with the following fields:
+        {
+          "score": <int 0-100>,
+          "reason": "<short explanation of why this score was given>",
+          "is_phishing": <bool>
+        }
+        Only return the JSON. No other text.
 
         From: {{.From}}
         To: {{.To}}
@@ -83,3 +89,26 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
 ```
+
+### Persistence & storage
+
+The application stores per-inbox SQLite files in the `storage/` directory and checkpoint files in `checkpoints/`. To persist message memory and sent-contact memory across container restarts, mount these paths into the container:
+
+```yaml
+services:
+  imap-spam-cleaner:
+    image: dominicgisler/imap-spam-cleaner:latest
+    container_name: imap-spam-cleaner
+    restart: always
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./storage:/app/storage          # persist recent and sent-contact DBs
+      - ./checkpoints:/app/checkpoints # persist checkpoint state
+```
+
+The `storage` directory will contain files such as:
+
+- `sent_contacts__<host>__<username>__<inbox>.db` — sent-folder contact memory used for auto-whitelist
+- `recent_messages__<host>__<username>__<inbox>.db` — recent message metadata and consolidations
+
+See [Storage & Memory](configuration/storage.md) for details about retention, pruning and consolidation.

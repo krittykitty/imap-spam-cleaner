@@ -2,6 +2,8 @@ package mailclean
 
 import (
 	"io"
+	"net/url"
+	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -27,6 +29,8 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 			b.WriteString(s)
 		}
 	}
+
+	uniqueLinkDomains := make(map[string]struct{})
 
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
@@ -93,6 +97,11 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 				linkText := strings.TrimSpace(txtBuilder.String())
 				linkText = strings.Join(strings.Fields(linkText), " ")
 				needSpace := b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") && !strings.HasSuffix(b.String(), " ")
+				if href != "" {
+					if domain := extractDomain(href); domain != "" {
+						uniqueLinkDomains[domain] = struct{}{}
+					}
+				}
 				if linkText == "" && href != "" {
 					if needSpace {
 						b.WriteString(" ")
@@ -101,6 +110,9 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 				} else if href != "" {
 					if needSpace {
 						b.WriteString(" ")
+					}
+					if isURLLike(linkText) && !domainMatches(linkText, href) {
+						b.WriteString("!! LINK MISMATCH !! ")
 					}
 					b.WriteString("[" + linkText + "](" + href + ")")
 				} else {
@@ -127,10 +139,18 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 	}
 
 	walk(doc)
-	out := b.String()
-	out = strings.TrimSpace(out)
+	out := strings.TrimSpace(b.String())
 	for strings.Contains(out, "\n\n\n") {
 		out = strings.ReplaceAll(out, "\n\n\n", "\n\n")
+	}
+
+	if len(uniqueLinkDomains) > 0 {
+		domains := make([]string, 0, len(uniqueLinkDomains))
+		for d := range uniqueLinkDomains {
+			domains = append(domains, d)
+		}
+		sort.Strings(domains)
+		out = "Link-Domains: " + strings.Join(domains, ", ") + "\n\n" + out
 	}
 
 	// Heuristic: strip content after common quoted-reply markers if they appear
@@ -172,6 +192,51 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 	}
 
 	return out, nil
+}
+
+func isURLLike(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") {
+		return true
+	}
+	if strings.Contains(lower, "www.") {
+		return true
+	}
+	if strings.Contains(lower, "@") {
+		return false
+	}
+	if strings.Contains(lower, ".") && !strings.ContainsAny(lower, " \t\n") {
+		return true
+	}
+	return false
+}
+
+func extractDomain(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	return strings.TrimSuffix(host, ".")
+}
+
+func domainMatches(text, href string) bool {
+	textDomain := extractDomain(text)
+	hrefDomain := extractDomain(href)
+	return textDomain != "" && hrefDomain != "" && textDomain == hrefDomain
 }
 
 // isGmailStyleQuoteHeader reports whether the "on " match at idx in the

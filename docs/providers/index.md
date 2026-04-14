@@ -19,14 +19,20 @@ The legacy `prompt` key is still accepted for backward compatibility and maps to
 ### Default system prompt
 
 ```
-You are a spam classification assistant. Analyze emails objectively and return only a single integer score.
+You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.
 ```
 
 ### Default user prompt
 
 ```
 Analyze the following email for its spam potential.
-Return a spam score between 0 and 100. Only answer with the number itself, no other text.
+Return your analysis as a JSON object with the following fields:
+{
+  "score": <int 0-100>,
+  "reason": "<short explanation of why this score was given>",
+  "is_phishing": <bool>
+}
+Only return the JSON. No other text.
 
 Headers:
 {{.Headers}}
@@ -45,6 +51,14 @@ HTML body:
 {{.HtmlBody}}
 ```
 
+### Default consolidation prompts
+
+- `consolidation_system_prompt` — system prompt for consolidation run B
+- `consolidation_user_prompt` — user prompt template for consolidation run B
+- `consolidation_prompt` — optional combined prompt for consolidation if you prefer a single string
+
+The consolidation prompt has its own template variables, separate from the spam-analysis prompt.
+
 ### Template variables
 
 | Variable        | Description                                                          |
@@ -57,4 +71,21 @@ HTML body:
 | `{{.Bcc}}`      | BCC recipients                                                       |
 | `{{.Subject}}`  | Message subject                                                      |
 | `{{.Body}}`     | Email body (HTML converted to Markdown when available)               |
+
+## Consolidation prompt variables
+
+| Variable                | Description                                                             |
+|-------------------------|-------------------------------------------------------------------------|
+| `{{.PreviousConsolidation}}` | The previously saved consolidated summary                          |
+| `{{.LatestSenders}}`    | Comma-separated list of recent senders                                 |
+| `{{.Messages}}`         | Recent message metadata available for consolidation                    |
+
+`{{.Messages}}` items include:
+
+- `From`
+- `To`
+- `Subject`
+- `Snippet`
+- `SpamScore`
+- `LLMReason`
 

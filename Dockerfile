@@ -7,6 +7,7 @@ COPY . .
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -a -installsuffix cgo -ldflags "-X main.version=${VERSION}" -o dist/imap-spam-cleaner
 
 FROM alpine:latest
+RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=build /app/dist/ .
 ENTRYPOINT [ "/app/imap-spam-cleaner" ]

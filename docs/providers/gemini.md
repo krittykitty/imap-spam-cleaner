@@ -18,6 +18,8 @@ Configuration options:
 
 See [Providers](index.md) for available template variables and default prompt values.
 
+Top-level `defaults` entries (`system_prompt`, `user_prompt`, `consolidation_system_prompt`, `consolidation_user_prompt`, `consolidation_prompt`) are applied to all providers unless overridden. Use keys prefixed with `consolidation_` inside a provider config, such as `consolidation_model`, `consolidation_system_prompt`, `consolidation_user_prompt`, or `consolidation_prompt`, to change only the consolidation run.
+
 Example:
 
 ```yaml
@@ -35,7 +37,13 @@ providers:
       # max_tokens: 512
       prompt: |
         Analyze the following email for its spam potential.
-        Return a spam score between 0 and 100. Only answer with the number itself.
+        Return your analysis as a JSON object with the following fields:
+        {
+          "score": <int 0-100>,
+          "reason": "<short explanation of why this score was given>",
+          "is_phishing": <bool>
+        }
+        Only return the JSON. No other text.
 
         From: {{.From}}
         To: {{.To}}

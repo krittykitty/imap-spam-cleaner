@@ -9,6 +9,7 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/inbox"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
+	"github.com/dominicgisler/imap-spam-cleaner/storage"
 )
 
 const appName = "imap-spam-cleaner"
@@ -37,9 +38,35 @@ func main() {
 	}
 
 	ctx := app.Context{
-		Config:  c,
-		Options: options,
+		Config:   c,
+		Options:  options,
+		Storages: make(map[string]*storage.Storage),
 	}
+
+	for _, inboxCfg := range c.Inboxes {
+		if !inboxCfg.EnableSentWhitelist {
+			continue
+		}
+
+		dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
+		// Only create one storage per account (host+username). If already created,
+		// reuse it for additional inbox entries for the same account.
+		if _, ok := ctx.Storages[dbPath]; ok {
+			continue
+		}
+		st, err := storage.New(dbPath)
+		if err != nil {
+			logx.Errorf("Could not open sent contacts storage for inbox %s: %v", inboxCfg.Username, err)
+			return
+		}
+		ctx.Storages[dbPath] = st
+	}
+
+	defer func() {
+		for _, st := range ctx.Storages {
+			_ = st.Close()
+		}
+	}()
 
 	var p provider.Provider
 	for name, prov := range c.Providers {

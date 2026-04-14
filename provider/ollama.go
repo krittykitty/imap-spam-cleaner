@@ -2,14 +2,16 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/logx"
 	"github.com/ollama/ollama/api"
 )
 
@@ -67,11 +69,70 @@ func (p *Ollama) HealthCheck(config map[string]string) error {
 	return checkTCP(net.JoinHostPort(host, port), 5*time.Second)
 }
 
-func (p *Ollama) Analyze(msg imap.Message) (int, error) {
+func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	prompt, err := p.AIBase.buildPrompt(msg)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
+	}
+
+	b := false
+	req := api.GenerateRequest{
+		Model:  p.model,
+		Prompt: prompt,
+		Stream: &b,
+		Format: json.RawMessage(`"json"`),
+	}
+	req.Options = map[string]interface{}{
+		"num_predict": int(p.effectiveMaxTokens()),
+	}
+
+	var resp string
+	frames := 0
+	nonEmptyFrames := 0
+	lastDoneReason := ""
+	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
+		frames++
+		if response.Response != "" {
+			nonEmptyFrames++
+		}
+		resp += response.Response
+		if response.DoneReason != "" {
+			lastDoneReason = response.DoneReason
+		}
+		return nil
+	}); err != nil {
+		return AnalysisResponse{}, err
+	}
+
+	var res AnalysisResponse
+	body := strings.TrimSpace(resp)
+	if body == "" {
+		logx.Warnf("Ollama returned empty analysis body for message #%d (model=%s frames=%d nonEmptyFrames=%d doneReason=%q)", msg.UID, p.model, frames, nonEmptyFrames, lastDoneReason)
+	} else {
+		logx.Debugf("Ollama analysis response stats for message #%d (model=%s bytes=%d frames=%d nonEmptyFrames=%d doneReason=%q)", msg.UID, p.model, len(body), frames, nonEmptyFrames, lastDoneReason)
+	}
+	res, err = parseAnalysisResponse(body)
+	if err != nil {
+		return AnalysisResponse{}, err
+	}
+
+	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
+	return res, nil
+}
+
+func (p *Ollama) Consolidate(contextText string) (string, error) {
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
+	if err != nil {
+		return "", err
+	}
+
+	if p.consolidationSystemPrompt != "" {
+		prompt = p.consolidationSystemPrompt + "\n\n" + prompt
 	}
 
 	b := false
@@ -80,20 +141,17 @@ func (p *Ollama) Analyze(msg imap.Message) (int, error) {
 		Prompt: prompt,
 		Stream: &b,
 	}
+	req.Options = map[string]interface{}{
+		"num_predict": int(p.effectiveMaxTokens()),
+	}
 
 	var resp string
 	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
-		resp = response.Response
+		resp += response.Response
 		return nil
 	}); err != nil {
-		return 0, err
+		return "", err
 	}
 
-	i, err := strconv.ParseInt(resp, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-
-	return int(i), nil
+	return strings.TrimSpace(resp), nil
 }
-

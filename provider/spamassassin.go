@@ -75,7 +75,7 @@ func (p *SpamAssassin) HealthCheck(config map[string]string) error {
 	return checkTCP(p.addr, p.timeout)
 }
 
-func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
+func (p *SpamAssassin) Analyze(msg imap.Message) (AnalysisResponse, error) {
 	// Prefer sending the original raw message if available.
 	var rawBytes []byte
 	if len(msg.Raw) > p.maxsize {
@@ -88,7 +88,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	// connect to spamd
 	conn, err := net.DialTimeout("tcp", p.addr, p.timeout)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 	defer func() {
 		_ = conn.Close()
@@ -97,21 +97,21 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	// build REPORT request per SPAMC protocol
 	reqHeader := fmt.Sprintf("REPORT SPAMC/1.5\r\nContent-length: %d\r\n\r\n", len(rawBytes))
 	if _, err := conn.Write([]byte(reqHeader)); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 	if _, err := conn.Write(rawBytes); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	// read response (headers + body). Use reader and read all available.
 	if err := conn.SetReadDeadline(time.Now().Add(p.timeout)); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 	reader := bufio.NewReader(conn)
 
 	// read status line
 	if _, err = reader.ReadString('\n'); err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	// read headers until blank line, capture Content-length if present
@@ -120,7 +120,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return 0, err
+			return AnalysisResponse{}, err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
@@ -146,7 +146,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	if contentLen >= 0 {
 		buf := make([]byte, contentLen)
 		if _, err = io.ReadFull(reader, buf); err != nil {
-			return 0, err
+			return AnalysisResponse{}, err
 		}
 		body = string(buf)
 	} else {
@@ -165,7 +165,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 					break
 				}
 				// other errors are real failures
-				return 0, err
+				return AnalysisResponse{}, err
 			}
 			sb.WriteString(line)
 		}
@@ -190,7 +190,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	}
 
 	if !found {
-		return 0, errors.New("could not parse spamassassin score from response")
+		return AnalysisResponse{}, errors.New("could not parse spamassassin score from response")
 	}
 
 	// map spamassassin score (float, typically -2..10) to 0..100
@@ -205,6 +205,7 @@ func (p *SpamAssassin) Analyze(msg imap.Message) (int, error) {
 	}
 	intScore := int(norm)
 
+	reason := fmt.Sprintf("spamassassin raw score: %v", scoreF)
 	logx.Debugf("spamassassin raw score for message #%d (%s): %v -> %d/100", msg.UID, msg.Subject, scoreF, intScore)
-	return intScore, nil
+	return AnalysisResponse{Score: intScore, Reason: reason}, nil
 }

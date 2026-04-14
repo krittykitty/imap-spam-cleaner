@@ -3,10 +3,11 @@ package provider
 import (
 	"context"
 	"errors"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/logx"
 
 	"google.golang.org/genai"
 )
@@ -60,11 +61,11 @@ func (p *Gemini) HealthCheck(config map[string]string) error {
 	return checkTCP("generativeai.googleapis.com:443", 5*time.Second)
 }
 
-func (p *Gemini) Analyze(msg imap.Message) (int, error) {
+func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	userContent, err := p.buildUserPrompt(msg)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	cfg := &genai.GenerateContentConfig{}
@@ -79,9 +80,7 @@ func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 	if p.topP != nil {
 		cfg.TopP = p.topP
 	}
-	if p.maxTokens != nil {
-		cfg.MaxOutputTokens = *p.maxTokens
-	}
+	cfg.MaxOutputTokens = p.effectiveMaxTokens()
 
 	resp, err := p.client.Models.GenerateContent(
 		context.Background(),
@@ -91,18 +90,68 @@ func (p *Gemini) Analyze(msg imap.Message) (int, error) {
 	)
 
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
 	if len(resp.Candidates) == 0 ||
 		len(resp.Candidates[0].Content.Parts) == 0 {
-		return 0, errors.New("empty gemini response")
+		return AnalysisResponse{}, errors.New("empty gemini response")
 	}
 
-	i, err := strconv.ParseInt(resp.Candidates[0].Content.Parts[0].Text, 10, 64)
+	var res AnalysisResponse
+	body := strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text)
+	res, err = parseAnalysisResponse(body)
 	if err != nil {
-		return 0, err
+		return AnalysisResponse{}, err
 	}
 
-	return int(i), nil
+	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
+	return res, nil
+}
+
+func (p *Gemini) Consolidate(contextText string) (string, error) {
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Gemini) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
+	if err != nil {
+		return "", err
+	}
+
+	cfg := &genai.GenerateContentConfig{}
+	systemPrompt := p.systemPrompt
+	if p.consolidationSystemPrompt != "" {
+		systemPrompt = p.consolidationSystemPrompt
+	}
+	if systemPrompt != "" {
+		cfg.SystemInstruction = &genai.Content{
+			Parts: []*genai.Part{{Text: systemPrompt}},
+		}
+	}
+	if p.temperature != nil {
+		cfg.Temperature = p.temperature
+	}
+	if p.topP != nil {
+		cfg.TopP = p.topP
+	}
+	cfg.MaxOutputTokens = p.effectiveMaxTokens()
+
+	resp, err := p.client.Models.GenerateContent(
+		context.Background(),
+		p.model,
+		genai.Text(prompt),
+		cfg,
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Candidates) == 0 ||
+		len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", errors.New("empty gemini response")
+	}
+
+	return strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text), nil
 }

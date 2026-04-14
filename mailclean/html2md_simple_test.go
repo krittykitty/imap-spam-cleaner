@@ -93,6 +93,27 @@ func TestHTMLToSimpleMarkdown_PlainText(t *testing.T) {
 	}
 }
 
+func TestHTMLToSimpleMarkdown_LinkMismatchAndDomains(t *testing.T) {
+	input := `<p>Click <a href="https://example.com">https://example.com</a> and <a href="http://phish-site.net/login">https://yourbank.com/login</a> now.</p>`
+	out, err := HTMLToSimpleMarkdown(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
+	}
+
+	if !strings.HasPrefix(out, "Link-Domains:") {
+		t.Errorf("expected link domain summary at the top, got: %q", out)
+	}
+	if !strings.Contains(out, "example.com") || !strings.Contains(out, "phish-site.net") {
+		t.Errorf("expected unique domains in summary, got: %q", out)
+	}
+	if !strings.Contains(out, "!! LINK MISMATCH !!") {
+		t.Errorf("expected mismatch warning in output, got: %q", out)
+	}
+	if !strings.Contains(out, "[https://yourbank.com/login](http://phish-site.net/login)") {
+		t.Errorf("expected markdown link with href preserved, got: %q", out)
+	}
+}
+
 func TestHTMLToSimpleMarkdown_ScriptStripped(t *testing.T) {
 	input := `<html><body><script>alert('xss')</script><p>Clean content</p></body></html>`
 	out, err := HTMLToSimpleMarkdown(strings.NewReader(input))

@@ -2,19 +2,48 @@ package inbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/dominicgisler/imap-spam-cleaner/app"
 	"github.com/dominicgisler/imap-spam-cleaner/checkpoint"
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
+	"github.com/dominicgisler/imap-spam-cleaner/internal/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
+	"github.com/dominicgisler/imap-spam-cleaner/mailclean"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
+	"github.com/dominicgisler/imap-spam-cleaner/storage"
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/go-co-op/gocron/v2"
 )
+
+const initialPopulationWindow = 90 * 24 * time.Hour
+const inboxSnippetMaxBytes = 100
+
+func cleanAndSnippetMessage(msg imap.Message, maxBytes int) string {
+	snippet := strings.TrimSpace(msg.TextBody)
+	if snippet == "" && msg.HtmlBody != "" {
+		cleaned, err := mailclean.HTMLToSimpleMarkdown(strings.NewReader(msg.HtmlBody))
+		if err == nil {
+			snippet = cleaned
+		} else {
+			snippet = strings.TrimSpace(msg.HtmlBody)
+		}
+	}
+	if snippet == "" && len(msg.Raw) > 0 {
+		snippet = string(msg.Raw)
+	}
+	// Keep one-line clean text for storage/context.
+	snippet = strings.Join(strings.Fields(snippet), " ")
+	if len(snippet) > maxBytes {
+		snippet = snippet[:maxBytes]
+	}
+	return strings.TrimSpace(snippet)
+}
 
 func Schedule(ctx app.Context) {
 
@@ -26,6 +55,8 @@ func Schedule(ctx app.Context) {
 
 	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Build dispatchers for providers that are used by any IDLE inboxes.
+	dispatchers := buildDispatchers(ctx, shutdownCtx)
 
 	jobs := 0
 	idleCount := 0
@@ -38,7 +69,8 @@ func Schedule(ctx app.Context) {
 
 		if inbox.EnableIdle {
 			logx.Infof("Skipping cron for idle inbox %s", inbox.Username)
-			go StartIdle(shutdownCtx, ctx, inbox, prov)
+			// pass a dispatcher for the provider if one exists (may be nil)
+			go StartIdle(shutdownCtx, ctx, inbox, prov, dispatchers[inbox.Provider])
 			idleCount++
 			continue
 		}
@@ -50,6 +82,20 @@ func Schedule(ctx app.Context) {
 		); err != nil {
 			logx.Errorf("Could not schedule inbox %s (%s): %v", inbox.Username, inbox.Schedule, err)
 			continue
+		}
+
+		if inbox.EnableSentWhitelist {
+			if err := syncSentFolder(ctx, inbox); err != nil {
+				logx.Errorf("Could not perform initial sent-folder sync for %s: %v", inbox.Username, err)
+			}
+			logx.Infof("Scheduling sent-folder sync for %s (%s)", inbox.Username, inbox.SentFolderSchedule)
+			if _, err = s.NewJob(
+				gocron.CronJob(inbox.SentFolderSchedule, false),
+				gocron.NewTask(syncSentFolder, ctx, inbox),
+			); err != nil {
+				logx.Errorf("Could not schedule sent-folder sync for %s (%s): %v", inbox.Username, inbox.SentFolderSchedule, err)
+				continue
+			}
 		}
 		jobs++
 	}
@@ -66,9 +112,173 @@ func Schedule(ctx app.Context) {
 
 	cancel()
 
+	// Close all dispatchers to ensure workers exit cleanly.
+	for _, d := range dispatchers {
+		if d != nil {
+			d.Close()
+		}
+	}
+
 	if err = s.Shutdown(); err != nil {
 		logx.Errorf("Could not shutdown scheduler: %v ", err)
 	}
+}
+
+// initialPopulation seeds the recent store with the last N messages from the
+// inbox and the sent folder (if enabled), and writes a simple initial
+// consolidation summary. This is intentionally lightweight; a later step may
+// replace the summary with an LLM-generated consolidation.
+func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
+	recentPath := storage.RecentDBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+
+	recentStore, err := storage.NewRecent(recentPath)
+	if err != nil {
+		return err
+	}
+	defer recentStore.Close()
+
+	// helper to seed inbox messages: latest N messages, including snippet/html body.
+	seedFromMailbox := func(cfg app.Inbox, maxMessages int) ([]string, error) {
+		cfg.MinAge = 0
+		cfg.MaxAge = 0
+
+		im, err := imap.New(cfg)
+		if err != nil {
+			return nil, err
+		}
+		defer im.Close()
+
+		var msgs []imap.Message
+		if maxMessages > 0 {
+			uids, err := im.GetLastUIDs(maxMessages)
+			if err != nil {
+				return nil, err
+			}
+			logx.Debugf("Initial population %s request latest %d UIDs, got %d UIDs", cfg.Inbox, maxMessages, len(uids))
+			msgs, err = im.LoadMessagesByUIDs(uids)
+			if err != nil {
+				return nil, err
+			}
+			logx.Debugf("Initial population %s loaded %d messages by UID", cfg.Inbox, len(msgs))
+		} else {
+			msgs, err = im.LoadMessages(0)
+			if err != nil {
+				return nil, err
+			}
+			logx.Debugf("Initial population %s loaded %d messages from messages load", cfg.Inbox, len(msgs))
+		}
+
+		subjects := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			snippet := cleanAndSnippetMessage(m, inboxSnippetMaxBytes)
+			var spamScore *float64
+			if m.SpamScoreValid {
+				spamScore = &m.SpamScore
+			}
+			if err := recentStore.UpsertMessage(storage.RecentMessage{
+				UID:         uint32(m.UID),
+				From:        m.From,
+				To:          m.To,
+				Subject:     m.Subject,
+				Snippet:     snippet,
+				Date:        m.Date,
+				SpamScore:   spamScore,
+				LLMReason:   m.LLMReason,
+				Whitelisted: m.Whitelisted,
+			}); err != nil {
+				logx.Errorf("initial population: could not insert message UID %d: %v", m.UID, err)
+			}
+			subjects = append(subjects, m.Subject)
+		}
+		return subjects, nil
+	}
+
+	seedHeadersFromMailbox := func(cfg app.Inbox, maxAge time.Duration) ([]string, error) {
+		cfg.MinAge = 0
+		cfg.MaxAge = 0
+		if maxAge > 0 {
+			cfg.MaxAge = maxAge
+		}
+
+		im, err := imap.New(cfg)
+		if err != nil {
+			return nil, err
+		}
+		defer im.Close()
+
+		msgs, err := im.LoadHeaders(0)
+		if err != nil {
+			return nil, err
+		}
+
+		recipients := make([]string, 0, len(msgs))
+		seen := make(map[string]struct{}, len(msgs))
+		for _, m := range msgs {
+			for _, email := range extractRecipientEmails(m) {
+				if _, ok := seen[email]; ok {
+					continue
+				}
+				seen[email] = struct{}{}
+				recipients = append(recipients, email)
+			}
+		}
+		return recipients, nil
+	}
+
+	// seed inbox with the latest 25 messages, regardless of age.
+	inboxCfgCopy := inboxCfg
+	inboxSubjects, err := seedFromMailbox(inboxCfgCopy, 25)
+	if err != nil {
+		logx.Errorf("initial population: failed seeding inbox %s: %v", inboxCfg.Username, err)
+	}
+
+	// seed sent folder subjects from the last 3 months.
+	sentRecipients := []string{}
+	if inboxCfg.EnableSentWhitelist && inboxCfg.SentFolder != "" {
+		sentCfg := inboxCfg
+		sentCfg.Inbox = inboxCfg.SentFolder
+		sentLookback := inboxCfg.SentFolderMaxAge
+		if sentLookback <= 0 {
+			sentLookback = initialPopulationWindow
+		}
+		sentRecipients, err = seedHeadersFromMailbox(sentCfg, sentLookback)
+		if err != nil {
+			logx.Errorf("initial population: failed seeding sent folder %s: %v", inboxCfg.Username, err)
+		}
+	}
+
+	// write a simple consolidation: list top subjects and counts of senders
+	var summaryBuilder strings.Builder
+	summaryBuilder.WriteString("Initial consolidation: recent activity summary.\n")
+	if len(inboxSubjects) > 0 {
+		summaryBuilder.WriteString("Inbox recent subjects:\n")
+		for i, s := range inboxSubjects {
+			if i >= 10 {
+				break
+			}
+			summaryBuilder.WriteString("- ")
+			summaryBuilder.WriteString(s)
+			summaryBuilder.WriteString("\n")
+		}
+	}
+	if len(sentRecipients) > 0 {
+		summaryBuilder.WriteString("Sent recent recipients:\n")
+		for i, s := range sentRecipients {
+			if i >= 10 {
+				break
+			}
+			summaryBuilder.WriteString("- ")
+			summaryBuilder.WriteString(s)
+			summaryBuilder.WriteString("\n")
+		}
+	}
+
+	if err := recentStore.SaveConsolidation(summaryBuilder.String()); err != nil {
+		return err
+	}
+
+	logx.Infof("Initial population complete for %s: stored %d inbox messages, %d unique sent recipients", inboxCfg.Username, len(inboxSubjects), len(sentRecipients))
+	return nil
 }
 
 func RunAllInboxes(ctx app.Context) {
@@ -79,15 +289,55 @@ func RunAllInboxes(ctx app.Context) {
 			logx.Errorf("Invalid provider %s for inbox %d", inbox.Provider, i)
 			continue
 		}
+		if inbox.EnableSentWhitelist {
+			if err := syncSentFolder(ctx, inbox); err != nil {
+				logx.Errorf("Sent-folder sync failed for %s: %v", inbox.Username, err)
+			}
+		}
 		processInbox(ctx, inbox, prov)
 	}
 }
 
+// buildDispatchers creates one dispatcher per provider that is used by at
+// least one IDLE-enabled inbox. The returned map keys are provider names as
+// referenced in the config (not provider types).
+func buildDispatchers(ctx app.Context, shutdownCtx context.Context) map[string]*dispatcher.Dispatcher {
+	used := make(map[string]struct{})
+	for _, inbox := range ctx.Config.Inboxes {
+		if inbox.EnableIdle {
+			used[inbox.Provider] = struct{}{}
+		}
+	}
+
+	dispatchers := make(map[string]*dispatcher.Dispatcher)
+	for name := range used {
+		prov, ok := ctx.Config.Providers[name]
+		if !ok {
+			logx.Errorf("buildDispatchers: invalid provider reference %s", name)
+			continue
+		}
+		d, err := dispatcher.New(shutdownCtx, prov.Type, prov.Config, prov.Concurrency, prov.RateLimit)
+		if err != nil {
+			logx.Errorf("Could not create dispatcher for provider %s: %v", name, err)
+			dispatchers[name] = nil
+			continue
+		}
+		dispatchers[name] = d
+		logx.Debugf("Created dispatcher for provider %s (concurrency=%d, rate_limit=%.2f)", name, prov.Concurrency, prov.RateLimit)
+	}
+	return dispatchers
+}
+
 func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
+	processInboxInternal(ctx, inboxCfg, prov, nil, context.Background())
+}
+
+func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher, runCtx context.Context) {
 
 	var err error
 	var p provider.Provider
 	var im *imap.Imap
+	var recentStore *storage.RecentStore
 
 	logx.Infof("Handling %s", inboxCfg.Username)
 	logx.Debugf("Run triggered at %s for %s (host=%s inbox=%s)", time.Now().UTC().Format(time.RFC3339), inboxCfg.Username, inboxCfg.Host, inboxCfg.Inbox)
@@ -113,11 +363,78 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 	}
 	defer im.Close()
 
+	recentPath := storage.RecentDBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+	recentStore, err = storage.NewRecent(recentPath)
+	if err != nil {
+		logx.Errorf("Could not open recent message store for %s: %v", inboxCfg.Username, err)
+	} else {
+		defer recentStore.Close()
+	}
+
+	storeRecentMessage := func(msg imap.Message) {
+		if recentStore == nil {
+			return
+		}
+		snippet := cleanAndSnippetMessage(msg, inboxSnippetMaxBytes)
+		var spamScore *float64
+		if msg.SpamScoreValid {
+			spamScore = &msg.SpamScore
+		}
+		if err := recentStore.UpsertMessage(storage.RecentMessage{
+			UID:         uint32(msg.UID),
+			From:        msg.From,
+			To:          msg.To,
+			Subject:     msg.Subject,
+			Snippet:     snippet,
+			Date:        msg.Date,
+			SpamScore:   spamScore,
+			LLMReason:   msg.LLMReason,
+			Whitelisted: msg.Whitelisted,
+		}); err != nil {
+			logx.Errorf("Could not store recent message for UID %d: %v", msg.UID, err)
+		}
+	}
+
 	currentUIDValidity := im.GetUIDValidity()
 
-	// First run: no checkpoint exists yet — establish the baseline UID.
+	// Check if initial population has ever been done for this mailbox
+	initialPopDone := false
+	if recentStore != nil {
+		done, err := recentStore.IsInitialPopulationDone()
+		if err != nil {
+			logx.Errorf("Could not check initial population flag for %s: %v", inboxCfg.Username, err)
+		} else {
+			initialPopDone = done
+		}
+	}
+	logx.Debugf("Initial population state for %s: done=%v (recent_store=%s)", inboxCfg.Username, initialPopDone, recentPath)
+
+	// If initial population has not been done, do it now (regardless of checkpoint state)
+	if !initialPopDone {
+		logx.Infof("Initial population not yet completed for %s; running bootstrap now", inboxCfg.Username)
+		if inboxCfg.EnableSentWhitelist {
+			if err := syncSentFolder(appCtx, inboxCfg); err != nil {
+				logx.Errorf("Bootstrap: sent-folder sync failed for %s: %v", inboxCfg.Username, err)
+			}
+		}
+		if err := initialPopulation(appCtx, inboxCfg); err != nil {
+			logx.Errorf("Bootstrap: population failed for %s: %v", inboxCfg.Username, err)
+		}
+		if recentStore != nil {
+			if err := recentStore.MarkInitialPopulationDone(); err != nil {
+				logx.Errorf("Bootstrap: could not mark initial population done for %s: %v", inboxCfg.Username, err)
+			}
+			if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
+				logx.Errorf("Bootstrap: consolidation failed for %s: %v", inboxCfg.Username, err)
+			} else {
+				logx.Infof("Bootstrap: consolidation completed for %s", inboxCfg.Username)
+			}
+		}
+	}
+
+	// If no checkpoint exists, establish it for incremental processing
 	if cp == nil {
-		logx.Infof("First run for %s: establishing checkpoint (no messages processed this run)", inboxCfg.Username)
+		logx.Infof("Establishing checkpoint for %s (first incremental run)", inboxCfg.Username)
 		maxUID, err := im.GetMaxUID()
 		if err != nil {
 			logx.Errorf("Could not get max UID: %v\n", err)
@@ -129,7 +446,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint: %v\n", err)
 		}
-		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d)", maxUID, currentUIDValidity)
+		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d); incremental processing will start on next run", maxUID, currentUIDValidity)
 		return
 	}
 
@@ -174,24 +491,17 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Loaded message UIDs for processing: %v", loadedUIDs)
 	}
 
-	p, err = provider.New(prov.Type)
-	if err != nil {
-		logx.Errorf("Could not load provider: %v\n", err)
-		return
-	}
-
-	if err = p.Init(prov.Config); err != nil {
-		logx.Errorf("Could not init provider: %v\n", err)
-		return
-	}
+	providerInitialized := false
 
 	moved := 0
 	processedUIDs := make([]uint32, 0, len(msgs))
 	skippedUIDs := make([]uint32, 0, len(msgs))
+	skippedReasons := make(map[uint32]string)
 	for _, m := range msgs {
 		if mgr.IsAlreadyProcessed(uint32(m.UID)) {
 			logx.Debugf("Skipping already processed message by checkpoint #%d (%s)", m.UID, m.Subject)
 			skippedUIDs = append(skippedUIDs, uint32(m.UID))
+			skippedReasons[uint32(m.UID)] = "already processed by checkpoint"
 			continue
 		}
 
@@ -203,6 +513,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		if !marked {
 			logx.Debugf("Skipping already processed message by uid marker #%d (%s)", m.UID, m.Subject)
 			skippedUIDs = append(skippedUIDs, uint32(m.UID))
+			skippedReasons[uint32(m.UID)] = "already processed by uid marker"
 			continue
 		}
 
@@ -216,7 +527,7 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
 		}
 
-		if wl, ok := ctx.Config.Whitelists[inboxCfg.Whitelist]; ok {
+		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
 			trustedSender := false
 			for _, rgx := range wl {
 				if rgx.Match([]byte(m.From)) {
@@ -225,23 +536,81 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 				}
 			}
 			if trustedSender {
+				m.Whitelisted = true
+				m.LLMReason = "whitelisted by trusted sender pattern"
+				storeRecentMessage(m)
 				logx.Debugf("Skipping message #%d (%s) because of trusted sender (%s)", m.UID, m.Subject, m.From)
 				skippedUIDs = append(skippedUIDs, uint32(m.UID))
+				skippedReasons[uint32(m.UID)] = "whitelisted by trusted sender pattern"
 				continue
 			}
 		}
 
-		n, err := p.Analyze(m)
+		if inboxCfg.EnableSentWhitelist {
+			dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
+			if st, ok := appCtx.Storages[dbPath]; ok && st != nil {
+				known, err := st.HasContact(m.From)
+				if err != nil {
+					logx.Errorf("Could not check sent-folder contact memory for %s: %v", m.From, err)
+				} else if known {
+					m.Whitelisted = true
+					m.LLMReason = "whitelisted by sent-folder contact memory"
+					storeRecentMessage(m)
+					logx.Debugf("Skipping message #%d (%s) because sender %s is in sent-folder contact memory", m.UID, m.Subject, m.From)
+					skippedUIDs = append(skippedUIDs, uint32(m.UID))
+					skippedReasons[uint32(m.UID)] = "whitelisted by sent-folder contact memory"
+					continue
+				}
+			}
+		}
+
+		if recentStore != nil {
+			m.Context, err = recentStore.GetConsolidatedContext(10, 0)
+			if err != nil {
+				logx.Errorf("Could not get consolidated context for %s: %v", inboxCfg.Username, err)
+			}
+		}
+
+		var analysis provider.AnalysisResponse
+		if disp == nil {
+			if !providerInitialized {
+				p, err = provider.New(prov.Type)
+				if err != nil {
+					logx.Errorf("Could not load provider: %v", err)
+					return
+				}
+				if err = p.Init(prov.Config); err != nil {
+					logx.Errorf("Could not init provider: %v", err)
+					return
+				}
+				providerInitialized = true
+			}
+
+			analysis, err = p.Analyze(m)
+		} else {
+			// respect explicit 0 (disable retries) and guard nil pointers
+			maxRetries := 3
+			if inboxCfg.MaxRetries != nil {
+				maxRetries = *inboxCfg.MaxRetries
+			}
+			analysis, err = disp.Analyze(runCtx, m, maxRetries)
+		}
+
 		if err != nil {
 			logx.Errorf("Could not analyze message #%d (%s): %v\n", m.UID, m.Subject, err)
 			logx.Infof("Continuing after failed analysis for UID %d (marked processed, will not retry)", m.UID)
 			processedUIDs = append(processedUIDs, uint32(m.UID))
 			continue
 		}
-		logx.Debugf("Spam score of message #%d (%s): %d/100", m.UID, m.Subject, n)
+		m.SpamScore = float64(analysis.Score)
+		m.SpamScoreValid = true
+		m.LLMReason = analysis.Reason
+		m.Whitelisted = false
+		storeRecentMessage(m)
+		logx.Infof("Spam score for message #%d: %d/100; From=%s; Subject=%s; Reason=%s", m.UID, analysis.Score, m.From, m.Subject, analysis.Reason)
 
-		if n >= inboxCfg.MinScore {
-			if ctx.Options.AnalyzeOnly {
+		if analysis.Score >= inboxCfg.MinScore {
+			if appCtx.Options.AnalyzeOnly {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {
 				if err = im.MoveMessage(m.UID, inboxCfg.Spam); err != nil {
@@ -260,7 +629,234 @@ func processInbox(ctx app.Context, inboxCfg app.Inbox, prov app.Provider) {
 		logx.Debugf("Processed message UIDs: %v", processedUIDs)
 	}
 	if len(skippedUIDs) > 0 {
-		logx.Debugf("Skipped message UIDs: %v", skippedUIDs)
+		// Build human-readable list with reasons
+		entries := make([]string, 0, len(skippedUIDs))
+		for _, uid := range skippedUIDs {
+			reason := skippedReasons[uid]
+			entries = append(entries, fmt.Sprintf("%d (%s)", uid, reason))
+		}
+		logx.Infof("Skipped message UIDs: %s", strings.Join(entries, ", "))
+	}
+	if recentStore != nil {
+		if len(processedUIDs) > 0 {
+			pending, err := recentStore.AddConsolidationPending(len(processedUIDs))
+			if err != nil {
+				logx.Errorf("Could not update consolidation pending counter for %s: %v", inboxCfg.Username, err)
+			} else {
+				logx.Debugf("Consolidation pending counter for %s is now %d", inboxCfg.Username, pending)
+			}
+		}
+
+		if shouldRunConsolidation(recentStore, inboxCfg) {
+			if err := runConsolidation(appCtx, inboxCfg, recentStore, p, prov); err != nil {
+				logx.Errorf("Could not consolidate recent context for %s: %v", inboxCfg.Username, err)
+			}
+		}
 	}
 	logx.Infof("Processed %d messages, moved %d messages", len(processedUIDs), moved)
+}
+
+func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox) bool {
+	if cfg.RecentConsolidationEvery <= 0 {
+		cfg.RecentConsolidationEvery = 50
+	}
+
+	pending, err := store.GetConsolidationPendingCount()
+	if err != nil {
+		logx.Errorf("Could not read consolidation pending counter: %v", err)
+		return false
+	}
+	if pending <= 0 {
+		return false
+	}
+
+	if pending >= cfg.RecentConsolidationEvery {
+		return true
+	}
+
+	lastRun, err := store.GetConsolidationLastRun()
+	if err != nil {
+		logx.Errorf("Could not read consolidation metadata: %v", err)
+		return false
+	}
+	if lastRun.IsZero() {
+		return true
+	}
+
+	if cfg.RecentConsolidationInterval <= 0 {
+		cfg.RecentConsolidationInterval = 24 * time.Hour
+	}
+	return time.Since(lastRun) >= cfg.RecentConsolidationInterval
+}
+
+func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
+	// Collect structured recent messages and previous consolidation.
+	// Use the latest 50 inbox messages without a date cutoff for consolidation.
+	messages, err := recentStore.GetRecentMessages(50, time.Time{})
+	if err != nil {
+		return err
+	}
+	prevConsolidation, err := recentStore.GetLatestConsolidation()
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 && prevConsolidation == "" {
+		logx.Debugf("Skipping consolidation for %s: no recent messages and no prior consolidation", inboxCfg.Username)
+		return nil
+	}
+
+	// Build list of latest senders
+	senderSet := make(map[string]struct{})
+	senderList := make([]string, 0, len(messages))
+	for _, m := range messages {
+		if m.From == "" {
+			continue
+		}
+		if _, ok := senderSet[m.From]; !ok {
+			senderSet[m.From] = struct{}{}
+			senderList = append(senderList, m.From)
+		}
+	}
+	latestSenders := strings.Join(senderList, ", ")
+
+	// Map messages to template struct
+	tplMsgs := make([]provider.ConsolidationMessage, 0, len(messages))
+	for _, m := range messages {
+		score := "n/a"
+		if m.SpamScore != nil {
+			score = fmt.Sprintf("%.1f", *m.SpamScore)
+		}
+		tplMsgs = append(tplMsgs, provider.ConsolidationMessage{
+			From:      m.From,
+			To:        m.To,
+			Subject:   m.Subject,
+			Snippet:   m.Snippet,
+			SpamScore: score,
+			LLMReason: m.LLMReason,
+		})
+	}
+
+	// Debug: show what will be sent to the consolidation provider
+	logx.Debugf("Consolidation preparing for %s: messages=%d prevConsolidationLen=%d latestSenders=%s", inboxCfg.Username, len(tplMsgs), len(prevConsolidation), latestSenders)
+	for i, pm := range tplMsgs {
+		if i >= 3 {
+			break
+		}
+		preview := pm.Snippet
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		logx.Debugf("Consolidation preview #%d: From=%s Subject=%s Snippet=%s", i, pm.From, pm.Subject, preview)
+	}
+
+	consolidationProvider := prov
+	if inboxCfg.ConsolidationProvider != "" {
+		cp, ok := ctx.Config.Providers[inboxCfg.ConsolidationProvider]
+		if !ok {
+			return fmt.Errorf("invalid consolidation provider %s for inbox %s", inboxCfg.ConsolidationProvider, inboxCfg.Username)
+		}
+		consolidationProvider = cp
+	}
+
+	// Build consolidation config: allow consolidation_ overrides inside provider config
+	consolidationConfig := make(map[string]string)
+	for k, v := range consolidationProvider.Config {
+		// copy base keys, including non-prefixed ones
+		if !strings.HasPrefix(k, "consolidation_") {
+			consolidationConfig[k] = v
+		}
+	}
+	// Apply consolidation_ overrides
+	for k, v := range consolidationProvider.Config {
+		if strings.HasPrefix(k, "consolidation_") {
+			newKey := strings.TrimPrefix(k, "consolidation_")
+			consolidationConfig[newKey] = v
+		}
+	}
+
+	// Decide whether to reuse the analysis provider instance or create a new one
+	var pcons provider.Provider
+	hasOverrides := false
+	for k := range consolidationProvider.Config {
+		if strings.HasPrefix(k, "consolidation_") {
+			hasOverrides = true
+			break
+		}
+	}
+	if !hasOverrides && inboxCfg.ConsolidationProvider == "" && p != nil {
+		// reuse analysis provider instance
+		pcons = p
+	} else {
+		pcons, err = provider.New(consolidationProvider.Type)
+		if err != nil {
+			return err
+		}
+		if err = pcons.Init(consolidationConfig); err != nil {
+			return err
+		}
+	}
+
+	var summary string
+	// Try new ConsolidateVars API first
+	if consolidator, ok := pcons.(interface {
+		ConsolidateVars(provider.ConsolidationPromptVars) (string, error)
+	}); ok {
+		logx.Debugf("Calling ConsolidateVars for %s: messages=%d previousConsolidationLen=%d", inboxCfg.Username, len(tplMsgs), len(prevConsolidation))
+		summary, err = consolidator.ConsolidateVars(provider.ConsolidationPromptVars{
+			Messages:              tplMsgs,
+			LatestSenders:         latestSenders,
+			PreviousConsolidation: prevConsolidation,
+		})
+		if err != nil {
+			return err
+		}
+	} else if consolidator, ok := pcons.(interface{ Consolidate(string) (string, error) }); ok {
+		// fallback to legacy string-based consolidation
+		contextStr, err := recentStore.GetConsolidatedContext(50, 0)
+		if err != nil {
+			return err
+		}
+		logx.Debugf("Calling legacy Consolidate for %s: context length=%d bytes", inboxCfg.Username, len(contextStr))
+		summary, err = consolidator.Consolidate(contextStr)
+		if err != nil {
+			return err
+		}
+	} else {
+		summary = "Consolidated recent context:\n" + prevConsolidation
+	}
+
+	if summary == "" {
+		if prevConsolidation != "" {
+			summary = prevConsolidation
+		} else {
+			// Ensure a first consolidation is always saved, even if provider output is empty.
+			summary = "Initial consolidation: recent activity summary.\n"
+			for i, msg := range messages {
+				if i >= 50 {
+					break
+				}
+				score := "n/a"
+				if msg.SpamScore != nil {
+					score = fmt.Sprintf("%.1f", *msg.SpamScore)
+				}
+				summary += fmt.Sprintf("- From: %s | Subject: %s | Score: %s\n", msg.From, msg.Subject, score)
+			}
+		}
+	}
+	// Log full consolidation result (no preview/truncation)
+	if summary == "" {
+		logx.Debugf("Consolidation result empty for %s; used fallback summary", inboxCfg.Username)
+	} else {
+		logx.Infof("Consolidation result for %s: %d bytes; summary: %s", inboxCfg.Username, len(summary), summary)
+	}
+
+	if err := recentStore.SaveConsolidation(summary); err != nil {
+		logx.Errorf("Could not save consolidation for %s: %v", inboxCfg.Username, err)
+		return err
+	}
+	if err := recentStore.ResetConsolidationPending(); err != nil {
+		logx.Warnf("Saved consolidation for %s but could not reset pending counter: %v", inboxCfg.Username, err)
+	}
+	logx.Infof("Saved consolidation for %s (%d bytes)", inboxCfg.Username, len(summary))
+	return nil
 }

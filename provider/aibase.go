@@ -41,12 +41,38 @@ func headersToString(headers map[string]string) string {
 // maxsize; the rest goes to the HTML-derived Markdown, reflecting that spam
 // signals tend to be denser in the HTML part.
 const textBodyDivisor = 4
+const minMaxTokens = int32(500)
 
-const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a single integer score.`
+const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
+
+const defaultConsolidationPrompt = `
+Use the previous consolidation and recent email metadata to create a new concise summary in five sentences.
+Do not include implementation details, JSON, or message IDs.
+
+Previous consolidation:
+{{.PreviousConsolidation}}
+
+Latest senders:
+{{.LatestSenders}}
+
+Recent messages:
+{{range .Messages}}
+- From: {{.From}}, To: {{.To}}, Subject: {{.Subject}}, Score: {{.SpamScore}}, Reason: {{.LLMReason}}
+{{end}}
+`
 
 const defaultUserPrompt = `
 Analyze the following email for its spam potential.
-Return a spam score between 0 and 100. Only answer with the number itself, no other text.
+Return your analysis as a JSON object with the following fields:
+{
+  "score": <int 0-100>,
+  "reason": "<short explanation of why this score was given>",
+  "is_phishing": <bool>
+}
+Only return the JSON. No other text.
+
+Recent context:
+{{.Context}}
 
 Headers:
 {{.Headers}}
@@ -65,14 +91,38 @@ HTML body (converted to Markdown):
 {{.HtmlBody}}
 `
 
+type ConsolidationPromptVars struct {
+	Messages              []ConsolidationMessage
+	LatestSenders         string
+	PreviousConsolidation string
+}
+
+type ConsolidationMessage struct {
+	From      string
+	To        string
+	Subject   string
+	Snippet   string
+	SpamScore string
+	LLMReason string
+}
+
+type AnalysisResponse struct {
+	Score      int    `json:"score"`
+	Reason     string `json:"reason"`
+	IsPhishing bool   `json:"is_phishing"`
+}
+
 type AIBase struct {
-	model        string
-	maxsize      int
-	systemPrompt string
-	userPrompt   *template.Template
-	temperature  *float32
-	topP         *float32
-	maxTokens    *int32
+	model                     string
+	maxsize                   int
+	systemPrompt              string
+	userPrompt                *template.Template
+	consolidationSystemPrompt string
+	consolidationUserPrompt   *template.Template
+	consolidationPrompt       *template.Template
+	temperature               *float32
+	topP                      *float32
+	maxTokens                 *int32
 }
 
 func (p *AIBase) ValidateConfig(config map[string]string) error {
@@ -106,6 +156,24 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 		return err
 	}
 
+	p.consolidationSystemPrompt = config["consolidation_system_prompt"]
+
+	if config["consolidation_user_prompt"] != "" {
+		p.consolidationUserPrompt, err = template.New("consolidation_user_prompt").Parse(config["consolidation_user_prompt"])
+		if err != nil {
+			return err
+		}
+	}
+
+	consolidationPromptStr := defaultConsolidationPrompt
+	if config["consolidation_prompt"] != "" {
+		consolidationPromptStr = config["consolidation_prompt"]
+	}
+	p.consolidationPrompt, err = template.New("consolidation_prompt").Parse(consolidationPromptStr)
+	if err != nil {
+		return err
+	}
+
 	if s := config["temperature"]; s != "" {
 		f, err := strconv.ParseFloat(s, 32)
 		if err != nil {
@@ -124,16 +192,73 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 		p.topP = &v
 	}
 
+	v := minMaxTokens
+	p.maxTokens = &v
 	if s := config["max_tokens"]; s != "" {
 		n, err := strconv.ParseInt(s, 10, 32)
 		if err != nil || n < 1 {
 			return errors.New("max_tokens must be a positive integer")
 		}
-		v := int32(n)
-		p.maxTokens = &v
+		if n < int64(minMaxTokens) {
+			logx.Warnf("Configured max_tokens=%d is too low; enforcing minimum of %d", n, minMaxTokens)
+			n = int64(minMaxTokens)
+		}
+		vv := int32(n)
+		p.maxTokens = &vv
 	}
 
 	return nil
+}
+
+func (p *AIBase) effectiveMaxTokens() int32 {
+	if p == nil || p.maxTokens == nil || *p.maxTokens < minMaxTokens {
+		return minMaxTokens
+	}
+	return *p.maxTokens
+}
+
+func (p *AIBase) formatHeaders(hdrs map[string]string) string {
+	if len(hdrs) == 0 {
+		return ""
+	}
+
+	// Define the priority order for headers to appear in the prompt.
+	// Most important trust signals first.
+	priorityOrder := []string{
+		"Authentication-Results",
+		"Return-Path",
+		"Reply-To",
+		"DKIM-Signature",
+		"ARC-Authentication-Results",
+		"Received",
+		"Message-ID",
+		"Sender",
+		"X-Mailer",
+		"User-Agent",
+	}
+
+	var lines []string
+
+	// Add headers in priority order
+	for _, name := range priorityOrder {
+		if value, exists := hdrs[name]; exists && value != "" {
+			// Format as "Header-Name: value"
+			lines = append(lines, name+": "+value)
+		}
+	}
+
+	// Add any remaining headers not in priority order
+	addedHeaders := make(map[string]bool)
+	for _, name := range priorityOrder {
+		addedHeaders[name] = true
+	}
+	for name, value := range hdrs {
+		if !addedHeaders[name] && value != "" {
+			lines = append(lines, name+": "+value)
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
@@ -177,6 +302,15 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		}
 	}
 
+	body := htmlBody
+	if body == "" {
+		body = textBody
+	}
+
+	formattedHeaders := p.formatHeaders(msg.Headers)
+
+	var buf bytes.Buffer
+
 	type TplVars struct {
 		From        string
 		To          string
@@ -188,14 +322,9 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		TextBody    string
 		HtmlBody    string
 		Body        string
+		Context     string
 	}
 
-	body := htmlBody
-	if body == "" {
-		body = textBody
-	}
-
-	var buf bytes.Buffer
 	if err := p.userPrompt.Execute(&buf, TplVars{
 		From:        msg.From,
 		To:          msg.To,
@@ -203,12 +332,34 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		Cc:          msg.Cc,
 		Bcc:         msg.Bcc,
 		Subject:     msg.Subject,
-		Headers:     headersToString(msg.Headers),
+		Headers:     formattedHeaders,
 		TextBody:    textBody,
 		HtmlBody:    htmlBody,
 		Body:        body,
+		Context:     msg.Context,
 	}); err != nil {
 		return "", errors.New("user_prompt template error: " + err.Error())
+	}
+
+	return buf.String(), nil
+}
+
+func (p *AIBase) buildConsolidationPrompt(vars ConsolidationPromptVars) (string, error) {
+	tpl := p.consolidationUserPrompt
+	if tpl == nil {
+		tpl = p.consolidationPrompt
+	}
+	if tpl == nil {
+		var err error
+		tpl, err = template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, vars); err != nil {
+		return "", err
 	}
 
 	return buf.String(), nil
