@@ -1,3 +1,5 @@
+//go:build archive
+
 package provider
 
 import (
@@ -20,6 +22,22 @@ const textBodyDivisor = 4
 const minMaxTokens = int32(500)
 
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
+
+const defaultConsolidationPrompt = `
+Use the previous consolidation and recent email metadata to create a new concise summary in five sentences.
+Do not include implementation details, JSON, or message IDs.
+
+Previous consolidation:
+{{.PreviousConsolidation}}
+
+Latest senders:
+{{.LatestSenders}}
+
+Recent messages:
+{{range .Messages}}
+- From: {{.From}}, To: {{.To}}, Subject: {{.Subject}}, Score: {{.SpamScore}}, Reason: {{.LLMReason}}
+{{end}}
+`
 
 const defaultUserPrompt = `
 Analyze the following email for its spam potential.
@@ -51,6 +69,21 @@ HTML body (converted to Markdown):
 {{.HtmlBody}}
 `
 
+type ConsolidationPromptVars struct {
+	Messages              []ConsolidationMessage
+	LatestSenders         string
+	PreviousConsolidation string
+}
+
+type ConsolidationMessage struct {
+	From      string
+	To        string
+	Subject   string
+	Snippet   string
+	SpamScore string
+	LLMReason string
+}
+
 type AnalysisResponse struct {
 	Score      int    `json:"score"`
 	Reason     string `json:"reason"`
@@ -58,13 +91,16 @@ type AnalysisResponse struct {
 }
 
 type AIBase struct {
-	model        string
-	maxsize      int
-	systemPrompt string
-	userPrompt   *template.Template
-	temperature  *float32
-	topP         *float32
-	maxTokens    *int32
+	model                     string
+	maxsize                   int
+	systemPrompt              string
+	userPrompt                *template.Template
+	consolidationSystemPrompt string
+	consolidationUserPrompt   *template.Template
+	consolidationPrompt       *template.Template
+	temperature               *float32
+	topP                      *float32
+	maxTokens                 *int32
 }
 
 func (p *AIBase) ValidateConfig(config map[string]string) error {
@@ -94,6 +130,24 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 	}
 
 	p.userPrompt, err = template.New("user_prompt").Parse(userPromptStr)
+	if err != nil {
+		return err
+	}
+
+	p.consolidationSystemPrompt = config["consolidation_system_prompt"]
+
+	if config["consolidation_user_prompt"] != "" {
+		p.consolidationUserPrompt, err = template.New("consolidation_user_prompt").Parse(config["consolidation_user_prompt"])
+		if err != nil {
+			return err
+		}
+	}
+
+	consolidationPromptStr := defaultConsolidationPrompt
+	if config["consolidation_prompt"] != "" {
+		consolidationPromptStr = config["consolidation_prompt"]
+	}
+	p.consolidationPrompt, err = template.New("consolidation_prompt").Parse(consolidationPromptStr)
 	if err != nil {
 		return err
 	}
@@ -267,6 +321,28 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 
 	return buf.String(), nil
 }
+
+func (p *AIBase) buildConsolidationPrompt(vars ConsolidationPromptVars) (string, error) {
+	tpl := p.consolidationUserPrompt
+	if tpl == nil {
+		tpl = p.consolidationPrompt
+	}
+	if tpl == nil {
+		var err error
+		tpl, err = template.New("consolidation_prompt").Parse(defaultConsolidationPrompt)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, vars); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
 func (p *AIBase) buildPrompt(msg imap.Message) (string, error) {
 	userPrompt, err := p.buildUserPrompt(msg)
 	if err != nil {

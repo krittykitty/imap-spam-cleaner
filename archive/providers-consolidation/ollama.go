@@ -1,3 +1,5 @@
+//go:build archive
+
 package provider
 
 import (
@@ -119,4 +121,39 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
 	return res, nil
+}
+
+func (p *Ollama) Consolidate(contextText string) (string, error) {
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
+	if err != nil {
+		return "", err
+	}
+
+	if p.consolidationSystemPrompt != "" {
+		prompt = p.consolidationSystemPrompt + "\n\n" + prompt
+	}
+
+	b := false
+	req := api.GenerateRequest{
+		Model:  p.model,
+		Prompt: prompt,
+		Stream: &b,
+	}
+	req.Options = map[string]interface{}{
+		"num_predict": int(p.effectiveMaxTokens()),
+	}
+
+	var resp string
+	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
+		resp += response.Response
+		return nil
+	}); err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(resp), nil
 }

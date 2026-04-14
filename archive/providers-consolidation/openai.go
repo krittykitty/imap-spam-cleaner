@@ -1,3 +1,5 @@
+//go:build archive
+
 package provider
 
 import (
@@ -100,4 +102,55 @@ func (p *OpenAI) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
 	return res, nil
+}
+
+func (p *OpenAI) Consolidate(contextText string) (string, error) {
+	// Backward-compatible wrapper: build vars with previous consolidation
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *OpenAI) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
+	if err != nil {
+		return "", err
+	}
+
+	messages := []openai.ChatCompletionMessage{}
+	systemPrompt := p.systemPrompt
+	if p.consolidationSystemPrompt != "" {
+		systemPrompt = p.consolidationSystemPrompt
+	}
+	if systemPrompt != "" {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemPrompt,
+		})
+	}
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: prompt,
+	})
+
+	req := openai.ChatCompletionRequest{
+		Model:    p.model,
+		Messages: messages,
+	}
+	if p.temperature != nil {
+		req.Temperature = *p.temperature
+	}
+	if p.topP != nil {
+		req.TopP = *p.topP
+	}
+	req.MaxCompletionTokens = int(p.effectiveMaxTokens())
+
+	resp, err := p.client.CreateChatCompletion(context.Background(), req)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", errors.New("empty openai response")
+	}
+
+	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }

@@ -1,3 +1,5 @@
+//go:build archive
+
 package provider
 
 import (
@@ -107,4 +109,51 @@ func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
 	return res, nil
+}
+
+func (p *Gemini) Consolidate(contextText string) (string, error) {
+	return p.ConsolidateVars(ConsolidationPromptVars{PreviousConsolidation: contextText})
+}
+
+func (p *Gemini) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
+	prompt, err := p.AIBase.buildConsolidationPrompt(vars)
+	if err != nil {
+		return "", err
+	}
+
+	cfg := &genai.GenerateContentConfig{}
+	systemPrompt := p.systemPrompt
+	if p.consolidationSystemPrompt != "" {
+		systemPrompt = p.consolidationSystemPrompt
+	}
+	if systemPrompt != "" {
+		cfg.SystemInstruction = &genai.Content{
+			Parts: []*genai.Part{{Text: systemPrompt}},
+		}
+	}
+	if p.temperature != nil {
+		cfg.Temperature = p.temperature
+	}
+	if p.topP != nil {
+		cfg.TopP = p.topP
+	}
+	cfg.MaxOutputTokens = p.effectiveMaxTokens()
+
+	resp, err := p.client.Models.GenerateContent(
+		context.Background(),
+		p.model,
+		genai.Text(prompt),
+		cfg,
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Candidates) == 0 ||
+		len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", errors.New("empty gemini response")
+	}
+
+	return strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text), nil
 }
