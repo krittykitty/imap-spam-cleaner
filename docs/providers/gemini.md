@@ -16,9 +16,7 @@ Configuration options:
 | `top_p`         | float   | no       | Nucleus sampling probability (0.0–1.0)                                                | `0.95`             |
 | `max_tokens`    | integer | no       | Maximum output tokens                                                                 | `512`              |
 
-See [Providers](index.md) for available template variables and default prompt values.
-
-Top-level `defaults` entries (`system_prompt`, `user_prompt`, `consolidation_system_prompt`, `consolidation_user_prompt`, `consolidation_prompt`) are applied to all providers unless overridden. Use keys prefixed with `consolidation_` inside a provider config, such as `consolidation_model`, `consolidation_system_prompt`, `consolidation_user_prompt`, or `consolidation_prompt`, to change only the consolidation run.
+See [Providers](index.md) for available template variables and default prompt values. Consolidation prompt keys are archived; see `archive/` for legacy usage.
 
 Example:
 

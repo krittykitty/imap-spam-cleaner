@@ -24,7 +24,7 @@ Key enhancements over upstream:
 - **Separate text/HTML body handling** — the most informative body part is selected automatically.
 - **Sent-folder memory** — outgoing recipients are tracked in SQLite so replies can be auto-whitelisted and skip the LLM entirely.
 - **Sent-folder memory** — outgoing recipients are tracked in SQLite so replies can be auto-whitelisted and skip the LLM entirely.
-- **Recent message memory & consolidation** — the application stores recent message metadata in a per-inbox SQLite database under `storage/` and can use an LLM provider to generate a short consolidated context summary which is saved and reused for subsequent analyses.
+// **Recent message memory & consolidation** — (archived; see `archive/` for legacy code)
 - **Relevant header extraction** — key authentication and routing headers (`Received`, `DKIM-Signature`, etc.) are forwarded to the AI for better phishing/spoofing detection.
 - **Split system/user prompt** — `system_prompt` sets the AI persona; `user_prompt` carries the email data. Both are fully customisable.
 - **LLM parameters** — `temperature`, `top_p`, and `max_tokens` are configurable per provider.
@@ -36,9 +36,9 @@ Key enhancements over upstream:
 Hard requirements for mailbox data handling:
 
 - **Sent folder (`sent`)**: only `To` recipient addresses are used, and only for the whitelist contact memory.
-- **Inbox recent store**: store `from`, `to`, `subject`, and a cleaned plain-text snippet.
+// **Inbox recent store**: store `from`, `to`, `subject`, and a cleaned plain-text snippet.
 - **Snippet limit**: inbox snippets are truncated to **100 bytes**.
-- **Analysis enrichment**: inbox recent records include spam score and model reason after analysis.
+// **Analysis enrichment**: inbox recent records include spam score and model reason after analysis.
 
 ## Example
 

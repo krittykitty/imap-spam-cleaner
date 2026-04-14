@@ -59,13 +59,5 @@ providers:
         {{.Body}}
 ```
 
-Use `consolidation_prompt` inside the provider config and `consolidation_provider` in the inbox definition to run a different LLM provider for consolidation.
-
-Use these keys to override consolidation-only behavior:
-- `consolidation_model`
-- `consolidation_system_prompt`
-- `consolidation_user_prompt`
-- `consolidation_prompt`
-
-Top-level `defaults` entries (`system_prompt`, `user_prompt`, `consolidation_prompt`) are applied to all providers unless overridden. Use keys prefixed with `consolidation_` inside a provider config, such as `consolidation_model` or `consolidation_prompt`, to change only the consolidation run.
+// Consolidation provider and prompt keys are archived. See `archive/` for legacy usage.
 

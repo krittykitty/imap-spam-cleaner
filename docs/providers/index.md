@@ -51,41 +51,5 @@ HTML body:
 {{.HtmlBody}}
 ```
 
-### Default consolidation prompts
-
-- `consolidation_system_prompt` — system prompt for consolidation run B
-- `consolidation_user_prompt` — user prompt template for consolidation run B
-- `consolidation_prompt` — optional combined prompt for consolidation if you prefer a single string
-
-The consolidation prompt has its own template variables, separate from the spam-analysis prompt.
-
-### Template variables
-
-| Variable        | Description                                                          |
-|-----------------|----------------------------------------------------------------------|
-| `{{.Headers}}`  | Selected authentication/routing headers (Received, DKIM-Signature…) |
-| `{{.From}}`     | Sender address                                                       |
-| `{{.To}}`       | Primary recipient(s)                                                 |
-| `{{.DeliveredTo}}` | Delivered-To header value                                         |
-| `{{.Cc}}`       | CC recipients                                                        |
-| `{{.Bcc}}`      | BCC recipients                                                       |
-| `{{.Subject}}`  | Message subject                                                      |
-| `{{.Body}}`     | Email body (HTML converted to Markdown when available)               |
-
-## Consolidation prompt variables
-
-| Variable                | Description                                                             |
-|-------------------------|-------------------------------------------------------------------------|
-| `{{.PreviousConsolidation}}` | The previously saved consolidated summary                          |
-| `{{.LatestSenders}}`    | Comma-separated list of recent senders                                 |
-| `{{.Messages}}`         | Recent message metadata available for consolidation                    |
-
-`{{.Messages}}` items include:
-
-- `From`
-- `To`
-- `Subject`
-- `Snippet`
-- `SpamScore`
-- `LLMReason`
+// Default consolidation prompts and template variables are archived. See `archive/` for legacy usage.
 

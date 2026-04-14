@@ -22,11 +22,8 @@ type Config struct {
 }
 
 type Defaults struct {
-	SystemPrompt              string `yaml:"system_prompt"`
-	UserPrompt                string `yaml:"user_prompt"`
-	ConsolidationSystemPrompt string `yaml:"consolidation_system_prompt"`
-	ConsolidationUserPrompt   string `yaml:"consolidation_user_prompt"`
-	ConsolidationPrompt       string `yaml:"consolidation_prompt"`
+	SystemPrompt string `yaml:"system_prompt"`
+	UserPrompt   string `yaml:"user_prompt"`
 }
 
 type Logging struct {
@@ -43,30 +40,27 @@ type Provider struct {
 const DefaultIdleTimeout = 25 * time.Minute
 
 type Inbox struct {
-	Schedule                    string        `yaml:"schedule"     validate:"required_without=EnableIdle"`
-	Host                        string        `yaml:"host"         validate:"required"`
-	Port                        int           `yaml:"port"         validate:"required"`
-	TLS                         bool          `yaml:"tls"          validate:"omitempty"`
-	Username                    string        `yaml:"username"     validate:"required"`
-	Password                    string        `yaml:"password"     validate:"required"`
-	Provider                    string        `yaml:"provider"     validate:"required"`
-	Inbox                       string        `yaml:"inbox"        validate:"required"`
-	Spam                        string        `yaml:"spam"         validate:"required"`
-	MinScore                    int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
-	MinAge                      time.Duration `yaml:"minage"       validate:"omitempty"`
-	MaxAge                      time.Duration `yaml:"maxage"       validate:"omitempty"`
-	Whitelist                   string        `yaml:"whitelist"    validate:"omitempty"`
-	EnableIdle                  bool          `yaml:"enable_idle"  validate:"omitempty"`
-	IdleTimeout                 time.Duration `yaml:"idle_timeout" validate:"omitempty"`
-	EnableSentWhitelist         bool          `yaml:"enable_sent_whitelist" validate:"omitempty"`
-	SentFolder                  string        `yaml:"sent_folder"  validate:"omitempty"`
-	SentFolderMaxAge            time.Duration `yaml:"sent_folder_maxage" validate:"omitempty"`
-	SentFolderSchedule          string        `yaml:"sent_folder_schedule" validate:"omitempty"`
-	RecentConsolidationEvery    int           `yaml:"recent_consolidation_every" validate:"omitempty,min=1"`
-	RecentConsolidationInterval time.Duration `yaml:"recent_consolidation_interval" validate:"omitempty"`
-	ConsolidationProvider       string        `yaml:"consolidation_provider" validate:"omitempty"`
-	ForceInitialPopulation      bool          `yaml:"force_initial_population" validate:"omitempty"`
-	MaxRetries                  *int          `yaml:"max_retries" validate:"omitempty,min=0"`
+	Schedule               string        `yaml:"schedule"     validate:"required_without=EnableIdle"`
+	Host                   string        `yaml:"host"         validate:"required"`
+	Port                   int           `yaml:"port"         validate:"required"`
+	TLS                    bool          `yaml:"tls"          validate:"omitempty"`
+	Username               string        `yaml:"username"     validate:"required"`
+	Password               string        `yaml:"password"     validate:"required"`
+	Provider               string        `yaml:"provider"     validate:"required"`
+	Inbox                  string        `yaml:"inbox"        validate:"required"`
+	Spam                   string        `yaml:"spam"         validate:"required"`
+	MinScore               int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
+	MinAge                 time.Duration `yaml:"minage"       validate:"omitempty"`
+	MaxAge                 time.Duration `yaml:"maxage"       validate:"omitempty"`
+	Whitelist              string        `yaml:"whitelist"    validate:"omitempty"`
+	EnableIdle             bool          `yaml:"enable_idle"  validate:"omitempty"`
+	IdleTimeout            time.Duration `yaml:"idle_timeout" validate:"omitempty"`
+	EnableSentWhitelist    bool          `yaml:"enable_sent_whitelist" validate:"omitempty"`
+	SentFolder             string        `yaml:"sent_folder"  validate:"omitempty"`
+	SentFolderMaxAge       time.Duration `yaml:"sent_folder_maxage" validate:"omitempty"`
+	SentFolderSchedule     string        `yaml:"sent_folder_schedule" validate:"omitempty"`
+	ForceInitialPopulation bool          `yaml:"force_initial_population" validate:"omitempty"`
+	MaxRetries             *int          `yaml:"max_retries" validate:"omitempty,min=0"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -92,15 +86,6 @@ func LoadConfig() (*Config, error) {
 		if config.Defaults.UserPrompt != "" && prov.Config["user_prompt"] == "" {
 			prov.Config["user_prompt"] = config.Defaults.UserPrompt
 		}
-		if config.Defaults.ConsolidationSystemPrompt != "" && prov.Config["consolidation_system_prompt"] == "" {
-			prov.Config["consolidation_system_prompt"] = config.Defaults.ConsolidationSystemPrompt
-		}
-		if config.Defaults.ConsolidationUserPrompt != "" && prov.Config["consolidation_user_prompt"] == "" {
-			prov.Config["consolidation_user_prompt"] = config.Defaults.ConsolidationUserPrompt
-		}
-		if config.Defaults.ConsolidationPrompt != "" && prov.Config["consolidation_prompt"] == "" {
-			prov.Config["consolidation_prompt"] = config.Defaults.ConsolidationPrompt
-		}
 		// provider-level defaults
 		if prov.Concurrency <= 0 {
 			prov.Concurrency = 1
@@ -123,11 +108,6 @@ func LoadConfig() (*Config, error) {
 		if _, ok := config.Providers[inbox.Provider]; !ok {
 			return nil, fmt.Errorf("invalid provider %s for inbox #%d", inbox.Provider, i)
 		}
-		if inbox.ConsolidationProvider != "" {
-			if _, ok := config.Providers[inbox.ConsolidationProvider]; !ok {
-				return nil, fmt.Errorf("invalid consolidation provider %s for inbox #%d", inbox.ConsolidationProvider, i)
-			}
-		}
 		if _, ok := config.Whitelists[inbox.Whitelist]; inbox.Whitelist != "" && !ok {
 			return nil, fmt.Errorf("invalid whitelist %s for inbox #%d", inbox.Whitelist, i)
 		}
@@ -145,12 +125,7 @@ func LoadConfig() (*Config, error) {
 				config.Inboxes[i].SentFolderSchedule = "0 * * * *"
 			}
 		}
-		if config.Inboxes[i].RecentConsolidationEvery == 0 {
-			config.Inboxes[i].RecentConsolidationEvery = 50
-		}
-		if config.Inboxes[i].RecentConsolidationInterval == 0 {
-			config.Inboxes[i].RecentConsolidationInterval = 24 * time.Hour
-		}
+		// Consolidation fields removed (archived)
 		if config.Inboxes[i].MaxRetries == nil {
 			v := 3
 			config.Inboxes[i].MaxRetries = &v

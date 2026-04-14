@@ -102,13 +102,13 @@ services:
     restart: always
     volumes:
       - ./config.yml:/app/config.yml:ro
-      - ./storage:/app/storage          # persist recent and sent-contact DBs
+      - ./storage:/app/storage          # persist sent-contact DBs
       - ./checkpoints:/app/checkpoints # persist checkpoint state
 ```
 
 The `storage` directory will contain files such as:
 
 - `sent_contacts__<host>__<username>__<inbox>.db` — sent-folder contact memory used for auto-whitelist
-- `recent_messages__<host>__<username>__<inbox>.db` — recent message metadata and consolidations
+// `recent_messages__<host>__<username>__<inbox>.db` — (archived; see `archive/` for legacy code)
 
-See [Storage & Memory](configuration/storage.md) for details about retention, pruning and consolidation.
+See [Storage & Memory](configuration/storage.md) for details about retention and pruning. Consolidation is archived; see `archive/` for legacy code.
