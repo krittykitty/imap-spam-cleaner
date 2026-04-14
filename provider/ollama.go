@@ -87,7 +87,7 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	var resp string
 	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
-		resp = response.Response
+		resp += response.Response
 		return nil
 	}); err != nil {
 		return AnalysisResponse{}, err
@@ -130,7 +130,7 @@ func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 
 	var resp string
 	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
-		resp = response.Response
+		resp += response.Response
 		return nil
 	}); err != nil {
 		return "", err
