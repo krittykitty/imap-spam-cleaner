@@ -12,6 +12,30 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/mailclean"
 )
 
+// headersToString converts a map[string]string of email headers to a
+// human-readable string in the canonical RelevantHeaders order.  Each entry is
+// rendered as "Name: value"; multi-value headers (values joined with "\n" by
+// extractRelevantHeaders) produce one "Name: value" line per value.
+func headersToString(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, name := range imap.RelevantHeaders {
+		val, ok := headers[name]
+		if !ok {
+			continue
+		}
+		for _, v := range strings.Split(val, "\n") {
+			sb.WriteString(name)
+			sb.WriteString(": ")
+			sb.WriteString(v)
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
 // textBodyDivisor controls the plain-text share of the LLM prompt budget when
 // both text and HTML bodies are present: plain-text gets 1/textBodyDivisor of
 // maxsize; the rest goes to the HTML-derived Markdown, reflecting that spam

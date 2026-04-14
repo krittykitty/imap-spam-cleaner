@@ -562,8 +562,9 @@ func extractRelevantHeaders(raw []byte) map[string]string {
 			break
 		}
 		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-			if include {
-				current += "\n" + line
+			// Continuation line — append to the current header value.
+			if currentName != "" {
+				currentValue += "\n" + line
 			}
 			continue
 		}
