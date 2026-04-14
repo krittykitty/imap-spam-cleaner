@@ -11,16 +11,15 @@ defaults:
     You are a cybersecurity analyst specializing in email fraud.
     Your goal is to detect spam, phishing, and spoofed senders.
   user_prompt: |
-    Analyze the following email for its spam score.
-    Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertising emails.
-
+    Analyze the following (truncated) email for its spam score. Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertizing emails.
+    Return a spam score between 0 and 100.
     Return your analysis as a JSON object with the following fields:
     {
       "score": <int 0-100>,
-      "reason": "<short explanation of why this score was given>",
+      "reason": "<short explanation in max two sentences of why this score was given>",
       "is_phishing": <bool>
     }
-    Only return the JSON. No other text.
+    Only return the JSON.
 
     Recent context:
     {{.Context}}
@@ -43,6 +42,7 @@ defaults:
   consolidation_user_prompt: |
     Create a new concise consolidation from the previous summary and the recent message metadata.
     Do not output a detailed list of messages, recipients, senders, or headers.
+    Answer in max 3 sentences.
 
     Previous consolidation: {{.PreviousConsolidation}}
 
@@ -55,7 +55,7 @@ defaults:
   consolidation_prompt: |
     Use the previous consolidation and recent messages to create a new concise summary in five sentences.
     Do not output a detailed list of messages, recipients, senders, or headers.
-    Use the message metadata and the previous consolidation only as background context.
+    Use the message metadata and the previous consolidation. Answer in max 3 sentences.
 
     Previous consolidation: {{.PreviousConsolidation}}
 
