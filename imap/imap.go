@@ -177,11 +177,6 @@ func (i *Imap) LoadHeaders(sinceUID imap.UID) ([]Message, error) {
 			message.Date = msg.InternalDate
 		}
 
-		if (i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge))) || (i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge))) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d date=%s MinAge=%v MaxAge=%v)", msg.UID, message.Date.UTC().Format(time.RFC3339), i.cfg.MinAge, i.cfg.MaxAge)
-			continue
-		}
-
 		messages = append(messages, message)
 	}
 
@@ -313,11 +308,6 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 		} else if message.Date.IsZero() {
 			logx.Debugf("message has no Date header, falling back to INTERNALDATE (msg.UID=%d)", msg.UID)
 			message.Date = msg.InternalDate
-		}
-
-		if (i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge))) || (i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge))) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d date=%s MinAge=%v MaxAge=%v)", msg.UID, message.Date.UTC().Format(time.RFC3339), i.cfg.MinAge, i.cfg.MaxAge)
-			continue
 		}
 
 		for {

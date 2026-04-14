@@ -22,6 +22,28 @@ import (
 )
 
 const initialPopulationWindow = 90 * 24 * time.Hour
+const inboxSnippetMaxBytes = 100
+
+func cleanAndSnippetMessage(msg imap.Message, maxBytes int) string {
+	snippet := strings.TrimSpace(msg.TextBody)
+	if snippet == "" && msg.HtmlBody != "" {
+		cleaned, err := mailclean.HTMLToSimpleMarkdown(strings.NewReader(msg.HtmlBody))
+		if err == nil {
+			snippet = cleaned
+		} else {
+			snippet = strings.TrimSpace(msg.HtmlBody)
+		}
+	}
+	if snippet == "" && len(msg.Raw) > 0 {
+		snippet = string(msg.Raw)
+	}
+	// Keep one-line clean text for storage/context.
+	snippet = strings.Join(strings.Fields(snippet), " ")
+	if len(snippet) > maxBytes {
+		snippet = snippet[:maxBytes]
+	}
+	return strings.TrimSpace(snippet)
+}
 
 func Schedule(ctx app.Context) {
 
@@ -115,22 +137,6 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	}
 	defer recentStore.Close()
 
-	cleanSnippet := func(msg imap.Message) string {
-		snippet := strings.TrimSpace(msg.TextBody)
-		if snippet == "" && msg.HtmlBody != "" {
-			cleaned, err := mailclean.HTMLToSimpleMarkdown(strings.NewReader(msg.HtmlBody))
-			if err == nil {
-				snippet = cleaned
-			} else {
-				snippet = strings.TrimSpace(msg.HtmlBody)
-			}
-		}
-		if len(snippet) > 250 {
-			snippet = snippet[:250]
-		}
-		return strings.TrimSpace(snippet)
-	}
-
 	// helper to seed inbox messages: latest N messages, including snippet/html body.
 	seedFromMailbox := func(cfg app.Inbox, maxMessages int) ([]string, error) {
 		cfg.MinAge = 0
@@ -164,7 +170,7 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 
 		subjects := make([]string, 0, len(msgs))
 		for _, m := range msgs {
-			snippet := cleanSnippet(m)
+			snippet := cleanAndSnippetMessage(m, inboxSnippetMaxBytes)
 			var spamScore *float64
 			if m.SpamScoreValid {
 				spamScore = &m.SpamScore
@@ -205,20 +211,13 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 			return nil, err
 		}
 
-		subjects := make([]string, 0, len(msgs))
+		recipients := make([]string, 0, len(msgs))
 		for _, m := range msgs {
-			if err := recentStore.UpsertMessage(storage.RecentMessage{
-				UID:     uint32(m.UID),
-				From:    m.From,
-				To:      m.To,
-				Subject: m.Subject,
-				Date:    m.Date,
-			}); err != nil {
-				logx.Errorf("initial population: could not insert sent-folder message UID %d: %v", m.UID, err)
+			if to := strings.TrimSpace(m.To); to != "" {
+				recipients = append(recipients, to)
 			}
-			subjects = append(subjects, m.Subject)
 		}
-		return subjects, nil
+		return recipients, nil
 	}
 
 	// seed inbox with the latest 25 messages, regardless of age.
@@ -229,11 +228,11 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	}
 
 	// seed sent folder subjects from the last 3 months.
-	sentSubjects := []string{}
+	sentRecipients := []string{}
 	if inboxCfg.EnableSentWhitelist && inboxCfg.SentFolder != "" {
 		sentCfg := inboxCfg
 		sentCfg.Inbox = inboxCfg.SentFolder
-		sentSubjects, err = seedHeadersFromMailbox(sentCfg, true)
+		sentRecipients, err = seedHeadersFromMailbox(sentCfg, true)
 		if err != nil {
 			logx.Errorf("initial population: failed seeding sent folder %s: %v", inboxCfg.Username, err)
 		}
@@ -253,9 +252,9 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 			summaryBuilder.WriteString("\n")
 		}
 	}
-	if len(sentSubjects) > 0 {
-		summaryBuilder.WriteString("Sent recent subjects:\n")
-		for i, s := range sentSubjects {
+	if len(sentRecipients) > 0 {
+		summaryBuilder.WriteString("Sent recent recipients:\n")
+		for i, s := range sentRecipients {
 			if i >= 10 {
 				break
 			}
@@ -269,7 +268,7 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		return err
 	}
 
-	logx.Infof("Initial population complete for %s: stored %d inbox subjects, %d sent subjects", inboxCfg.Username, len(inboxSubjects), len(sentSubjects))
+	logx.Infof("Initial population complete for %s: stored %d inbox subjects, %d sent recipients", inboxCfg.Username, len(inboxSubjects), len(sentRecipients))
 	return nil
 }
 
@@ -363,34 +362,11 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		defer recentStore.Close()
 	}
 
-	snippetFromMessage := func(msg imap.Message, maxBytes int) string {
-		if msg.TextBody != "" {
-			if len(msg.TextBody) > maxBytes {
-				return msg.TextBody[:maxBytes]
-			}
-			return msg.TextBody
-		}
-		if msg.HtmlBody != "" {
-			if len(msg.HtmlBody) > maxBytes {
-				return msg.HtmlBody[:maxBytes]
-			}
-			return msg.HtmlBody
-		}
-		if len(msg.Raw) > 0 {
-			raw := string(msg.Raw)
-			if len(raw) > maxBytes {
-				return raw[:maxBytes]
-			}
-			return raw
-		}
-		return ""
-	}
-
 	storeRecentMessage := func(msg imap.Message) {
 		if recentStore == nil {
 			return
 		}
-		snippet := snippetFromMessage(msg, 250)
+		snippet := cleanAndSnippetMessage(msg, inboxSnippetMaxBytes)
 		var spamScore *float64
 		if msg.SpamScoreValid {
 			spamScore = &msg.SpamScore
@@ -422,6 +398,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			initialPopDone = done
 		}
 	}
+	logx.Debugf("Initial population state for %s: done=%v (recent_store=%s)", inboxCfg.Username, initialPopDone, recentPath)
 
 	// If initial population has not been done, do it now (regardless of checkpoint state)
 	if !initialPopDone {
@@ -681,20 +658,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		return err
 	}
 	if len(messages) == 0 && prevConsolidation == "" {
-		logx.Infof("No recent memory found for %s; running initial population bootstrap", inboxCfg.Username)
-		if err := initialPopulation(ctx, inboxCfg); err != nil {
-			return fmt.Errorf("initial population bootstrap failed: %w", err)
-		}
-		messages, err = recentStore.GetRecentMessages(50, time.Now().UTC().Add(-90*24*time.Hour))
-		if err != nil {
-			return err
-		}
-		prevConsolidation, err = recentStore.GetLatestConsolidation()
-		if err != nil {
-			return err
-		}
-	}
-	if len(messages) == 0 && prevConsolidation == "" {
+		logx.Debugf("Skipping consolidation for %s: no recent messages and no prior consolidation", inboxCfg.Username)
 		return nil
 	}
 

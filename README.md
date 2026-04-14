@@ -31,6 +31,15 @@ Key enhancements over upstream:
 - **Gemini provider** — Google Gemini is supported in addition to OpenAI and Ollama.
 - **Provider health checks** — TCP reachability is verified before starting to process mail.
 
+## Data Rules
+
+Hard requirements for mailbox data handling:
+
+- **Sent folder (`sent`)**: only `To` recipient addresses are used, and only for the whitelist contact memory.
+- **Inbox recent store**: store `from`, `to`, `subject`, and a cleaned plain-text snippet.
+- **Snippet limit**: inbox snippets are truncated to **100 bytes**.
+- **Analysis enrichment**: inbox recent records include spam score and model reason after analysis.
+
 ## Example
 
 ```console

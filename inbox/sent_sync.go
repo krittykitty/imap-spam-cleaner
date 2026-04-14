@@ -105,11 +105,9 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 }
 
 func extractRecipientEmails(message imap.Message) []string {
-	emails := make([]string, 0, 4)
-	for _, value := range []string{message.To, message.Cc} {
-		for _, email := range storage.ParseAddressList(value) {
-			emails = append(emails, email)
-		}
+	emails := make([]string, 0, 2)
+	for _, email := range storage.ParseAddressList(message.To) {
+		emails = append(emails, email)
 	}
 	return emails
 }
