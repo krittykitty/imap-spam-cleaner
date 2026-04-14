@@ -89,6 +89,13 @@ Feel free to contribute to this project by opening issues for useful features, r
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/krittykitty">
+                    <img src="https://avatars.githubusercontent.com/u/83251536?v=4" width="100;" alt="krittykitty"/>
+                    <br />
+                    <sub><b>krittykitty</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/nistei">
                     <img src="https://avatars.githubusercontent.com/u/1652722?v=4" width="100;" alt="nistei"/>
                     <br />
