@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 )
 
 const defaultRecentSnippetBytes = 250
+
+const (
+	metadataInitialPopulationDone    = "initial_population_done"
+	metadataConsolidationPending     = "consolidation_pending_count"
+	metadataConsolidationLastRunTime = "consolidation_last_run"
+)
 
 var sanitizeFileName = func(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -207,20 +214,38 @@ func (s *RecentStore) SaveConsolidation(summary string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("recent store is not initialized")
 	}
-	_, err := s.db.Exec(`INSERT INTO consolidations(summary, created_at) VALUES (?, ?)`, summary, time.Now().UTC().Format(time.RFC3339))
-	return err
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.Exec(`INSERT INTO consolidations(summary, created_at) VALUES (?, ?)`, summary, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+        INSERT INTO metadata (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+    `, metadataConsolidationLastRunTime, now, now); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *RecentStore) IsInitialPopulationDone() (bool, error) {
 	if s == nil || s.db == nil {
 		return false, fmt.Errorf("recent store is not initialized")
 	}
-	row := s.db.QueryRow(`SELECT value FROM metadata WHERE key = 'initial_population_done'`)
-	var value string
-	if err := row.Scan(&value); err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
+	value, err := s.getMetadataValue(metadataInitialPopulationDone)
+	if err != nil {
 		return false, err
 	}
 	return value == "true", nil
@@ -230,11 +255,102 @@ func (s *RecentStore) MarkInitialPopulationDone() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("recent store is not initialized")
 	}
+	return s.setMetadataValue(metadataInitialPopulationDone, "true")
+}
+
+func (s *RecentStore) GetConsolidationPendingCount() (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("recent store is not initialized")
+	}
+
+	value, err := s.getMetadataValue(metadataConsolidationPending)
+	if err != nil {
+		return 0, err
+	}
+	if value == "" {
+		return 0, nil
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid consolidation pending count %q: %w", value, err)
+	}
+	if n < 0 {
+		return 0, nil
+	}
+	return n, nil
+}
+
+func (s *RecentStore) AddConsolidationPending(delta int) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("recent store is not initialized")
+	}
+
+	current, err := s.GetConsolidationPendingCount()
+	if err != nil {
+		return 0, err
+	}
+	if delta <= 0 {
+		return current, nil
+	}
+
+	next := current + delta
+	if err := s.setMetadataValue(metadataConsolidationPending, strconv.Itoa(next)); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+func (s *RecentStore) ResetConsolidationPending() error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("recent store is not initialized")
+	}
+	return s.setMetadataValue(metadataConsolidationPending, "0")
+}
+
+func (s *RecentStore) GetConsolidationLastRun() (time.Time, error) {
+	if s == nil || s.db == nil {
+		return time.Time{}, fmt.Errorf("recent store is not initialized")
+	}
+
+	value, err := s.getMetadataValue(metadataConsolidationLastRunTime)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if value != "" {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid consolidation last run timestamp %q: %w", value, err)
+		}
+		return parsed, nil
+	}
+
+	meta, err := s.GetLatestConsolidationMeta()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return meta.CreatedAt, nil
+}
+
+func (s *RecentStore) getMetadataValue(key string) (string, error) {
+	row := s.db.QueryRow(`SELECT value FROM metadata WHERE key = ?`, key)
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+func (s *RecentStore) setMetadataValue(key, value string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(`
         INSERT INTO metadata (key, value, updated_at)
-        VALUES ('initial_population_done', 'true', ?)
-        ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = ?;
-    `, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+    `, key, value, now)
 	return err
 }
 

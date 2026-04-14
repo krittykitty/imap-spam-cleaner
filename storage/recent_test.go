@@ -84,3 +84,74 @@ func TestRecentStoreUpsertAndQuery(t *testing.T) {
 		t.Fatal("expected old message to be pruned from consolidated context")
 	}
 }
+
+func TestRecentStoreConsolidationStatePersistence(t *testing.T) {
+	dir := filepath.Join("testdata", "recent_state")
+	os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+
+	dbPath := filepath.Join(dir, "recent.db")
+	st, err := NewRecent(dbPath)
+	if err != nil {
+		t.Fatalf("NewRecent failed: %v", err)
+	}
+	defer st.Close()
+
+	done, err := st.IsInitialPopulationDone()
+	if err != nil {
+		t.Fatalf("IsInitialPopulationDone failed: %v", err)
+	}
+	if done {
+		t.Fatal("expected initial population to be false by default")
+	}
+
+	if err := st.MarkInitialPopulationDone(); err != nil {
+		t.Fatalf("MarkInitialPopulationDone failed: %v", err)
+	}
+	done, err = st.IsInitialPopulationDone()
+	if err != nil {
+		t.Fatalf("IsInitialPopulationDone failed after mark: %v", err)
+	}
+	if !done {
+		t.Fatal("expected initial population to be true after mark")
+	}
+
+	pending, err := st.GetConsolidationPendingCount()
+	if err != nil {
+		t.Fatalf("GetConsolidationPendingCount failed: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("expected pending=0, got %d", pending)
+	}
+
+	pending, err = st.AddConsolidationPending(7)
+	if err != nil {
+		t.Fatalf("AddConsolidationPending failed: %v", err)
+	}
+	if pending != 7 {
+		t.Fatalf("expected pending=7, got %d", pending)
+	}
+
+	if err := st.SaveConsolidation("summary"); err != nil {
+		t.Fatalf("SaveConsolidation failed: %v", err)
+	}
+
+	lastRun, err := st.GetConsolidationLastRun()
+	if err != nil {
+		t.Fatalf("GetConsolidationLastRun failed: %v", err)
+	}
+	if lastRun.IsZero() {
+		t.Fatal("expected non-zero consolidation last run")
+	}
+
+	if err := st.ResetConsolidationPending(); err != nil {
+		t.Fatalf("ResetConsolidationPending failed: %v", err)
+	}
+	pending, err = st.GetConsolidationPendingCount()
+	if err != nil {
+		t.Fatalf("GetConsolidationPendingCount failed after reset: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("expected pending=0 after reset, got %d", pending)
+	}
+}

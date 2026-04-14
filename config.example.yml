@@ -76,7 +76,7 @@ providers:                        # providers to be used for inboxes
       model: gpt-4o-mini          # gpt model to use
       maxsize: 100000             # message size limit for prompt (bytes)
       temperature: 0.1            # optional: sampling temperature (0.0-2.0)
-      max_tokens: 8               # optional: max tokens in the response
+      max_tokens: 500             # optional: max tokens in the response (minimum enforced: 500)
       # Optional overrides for spam analysis prompt A:
       # system_prompt: |
       #   You are a cybersecurity analyst specializing in email fraud.

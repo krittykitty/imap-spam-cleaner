@@ -193,11 +193,11 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		return subjects, nil
 	}
 
-	seedHeadersFromMailbox := func(cfg app.Inbox, useThreeMonthWindow bool) ([]string, error) {
+	seedHeadersFromMailbox := func(cfg app.Inbox, maxAge time.Duration) ([]string, error) {
 		cfg.MinAge = 0
 		cfg.MaxAge = 0
-		if useThreeMonthWindow {
-			cfg.MaxAge = initialPopulationWindow
+		if maxAge > 0 {
+			cfg.MaxAge = maxAge
 		}
 
 		im, err := imap.New(cfg)
@@ -212,15 +212,14 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		}
 
 		recipients := make([]string, 0, len(msgs))
+		seen := make(map[string]struct{}, len(msgs))
 		for _, m := range msgs {
-			if to := strings.TrimSpace(m.To); to != "" {
-				recipients = append(recipients, to)
-			}
-			if cc := strings.TrimSpace(m.Cc); cc != "" {
-				recipients = append(recipients, cc)
-			}
-			if bcc := strings.TrimSpace(m.Bcc); bcc != "" {
-				recipients = append(recipients, bcc)
+			for _, email := range extractRecipientEmails(m) {
+				if _, ok := seen[email]; ok {
+					continue
+				}
+				seen[email] = struct{}{}
+				recipients = append(recipients, email)
 			}
 		}
 		return recipients, nil
@@ -238,7 +237,11 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	if inboxCfg.EnableSentWhitelist && inboxCfg.SentFolder != "" {
 		sentCfg := inboxCfg
 		sentCfg.Inbox = inboxCfg.SentFolder
-		sentRecipients, err = seedHeadersFromMailbox(sentCfg, true)
+		sentLookback := inboxCfg.SentFolderMaxAge
+		if sentLookback <= 0 {
+			sentLookback = initialPopulationWindow
+		}
+		sentRecipients, err = seedHeadersFromMailbox(sentCfg, sentLookback)
 		if err != nil {
 			logx.Errorf("initial population: failed seeding sent folder %s: %v", inboxCfg.Username, err)
 		}
@@ -274,7 +277,7 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		return err
 	}
 
-	logx.Infof("Initial population complete for %s: stored %d inbox subjects, %d sent recipients", inboxCfg.Username, len(inboxSubjects), len(sentRecipients))
+	logx.Infof("Initial population complete for %s: stored %d inbox messages, %d unique sent recipients", inboxCfg.Username, len(inboxSubjects), len(sentRecipients))
 	return nil
 }
 
@@ -634,33 +637,56 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		}
 		logx.Infof("Skipped message UIDs: %s", strings.Join(entries, ", "))
 	}
-	if recentStore != nil && shouldRunConsolidation(recentStore, inboxCfg, len(processedUIDs)) {
-		if err := runConsolidation(appCtx, inboxCfg, recentStore, p, prov); err != nil {
-			logx.Errorf("Could not consolidate recent context for %s: %v", inboxCfg.Username, err)
+	if recentStore != nil {
+		if len(processedUIDs) > 0 {
+			pending, err := recentStore.AddConsolidationPending(len(processedUIDs))
+			if err != nil {
+				logx.Errorf("Could not update consolidation pending counter for %s: %v", inboxCfg.Username, err)
+			} else {
+				logx.Debugf("Consolidation pending counter for %s is now %d", inboxCfg.Username, pending)
+			}
+		}
+
+		if shouldRunConsolidation(recentStore, inboxCfg) {
+			if err := runConsolidation(appCtx, inboxCfg, recentStore, p, prov); err != nil {
+				logx.Errorf("Could not consolidate recent context for %s: %v", inboxCfg.Username, err)
+			}
 		}
 	}
 	logx.Infof("Processed %d messages, moved %d messages", len(processedUIDs), moved)
 }
 
-func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox, processed int) bool {
+func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox) bool {
 	if cfg.RecentConsolidationEvery <= 0 {
 		cfg.RecentConsolidationEvery = 50
 	}
-	if processed >= cfg.RecentConsolidationEvery {
+
+	pending, err := store.GetConsolidationPendingCount()
+	if err != nil {
+		logx.Errorf("Could not read consolidation pending counter: %v", err)
+		return false
+	}
+	if pending <= 0 {
+		return false
+	}
+
+	if pending >= cfg.RecentConsolidationEvery {
 		return true
 	}
-	meta, err := store.GetLatestConsolidationMeta()
+
+	lastRun, err := store.GetConsolidationLastRun()
 	if err != nil {
 		logx.Errorf("Could not read consolidation metadata: %v", err)
-		return processed > 0
+		return false
 	}
-	if meta.CreatedAt.IsZero() {
+	if lastRun.IsZero() {
 		return true
 	}
+
 	if cfg.RecentConsolidationInterval <= 0 {
 		cfg.RecentConsolidationInterval = 24 * time.Hour
 	}
-	return time.Since(meta.CreatedAt) >= cfg.RecentConsolidationInterval
+	return time.Since(lastRun) >= cfg.RecentConsolidationInterval
 }
 
 func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
@@ -831,6 +857,9 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 	if err := recentStore.SaveConsolidation(summary); err != nil {
 		logx.Errorf("Could not save consolidation for %s: %v", inboxCfg.Username, err)
 		return err
+	}
+	if err := recentStore.ResetConsolidationPending(); err != nil {
+		logx.Warnf("Saved consolidation for %s but could not reset pending counter: %v", inboxCfg.Username, err)
 	}
 	logx.Infof("Saved consolidation for %s (%d bytes)", inboxCfg.Username, len(summary))
 	return nil

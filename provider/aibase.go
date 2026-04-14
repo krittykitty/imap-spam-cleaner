@@ -17,6 +17,7 @@ import (
 // maxsize; the rest goes to the HTML-derived Markdown, reflecting that spam
 // signals tend to be denser in the HTML part.
 const textBodyDivisor = 4
+const minMaxTokens = int32(500)
 
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
 
@@ -167,13 +168,19 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 		p.topP = &v
 	}
 
+	v := minMaxTokens
+	p.maxTokens = &v
 	if s := config["max_tokens"]; s != "" {
 		n, err := strconv.ParseInt(s, 10, 32)
 		if err != nil || n < 1 {
 			return errors.New("max_tokens must be a positive integer")
 		}
-		v := int32(n)
-		p.maxTokens = &v
+		if n < int64(minMaxTokens) {
+			logx.Warnf("Configured max_tokens=%d is too low; enforcing minimum of %d", n, minMaxTokens)
+			n = int64(minMaxTokens)
+		}
+		vv := int32(n)
+		p.maxTokens = &vv
 	}
 
 	return nil

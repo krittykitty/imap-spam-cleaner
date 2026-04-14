@@ -81,6 +81,11 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 		Prompt: prompt,
 		Stream: &b,
 	}
+	if p.maxTokens != nil {
+		req.Options = map[string]interface{}{
+			"num_predict": int(*p.maxTokens),
+		}
+	}
 
 	var resp string
 	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
@@ -120,6 +125,11 @@ func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 		Model:  p.model,
 		Prompt: prompt,
 		Stream: &b,
+	}
+	if p.maxTokens != nil {
+		req.Options = map[string]interface{}{
+			"num_predict": int(*p.maxTokens),
+		}
 	}
 
 	var resp string
