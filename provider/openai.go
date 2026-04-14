@@ -79,9 +79,7 @@ func (p *OpenAI) Analyze(msg imap.Message) (AnalysisResponse, error) {
 	if p.topP != nil {
 		req.TopP = *p.topP
 	}
-	if p.maxTokens != nil {
-		req.MaxCompletionTokens = int(*p.maxTokens)
-	}
+	req.MaxCompletionTokens = int(p.effectiveMaxTokens())
 
 	resp, err := p.client.CreateChatCompletion(context.Background(), req)
 
@@ -141,9 +139,7 @@ func (p *OpenAI) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 	if p.topP != nil {
 		req.TopP = *p.topP
 	}
-	if p.maxTokens != nil {
-		req.MaxCompletionTokens = int(*p.maxTokens)
-	}
+	req.MaxCompletionTokens = int(p.effectiveMaxTokens())
 
 	resp, err := p.client.CreateChatCompletion(context.Background(), req)
 	if err != nil {

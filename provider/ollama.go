@@ -81,10 +81,8 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 		Prompt: prompt,
 		Stream: &b,
 	}
-	if p.maxTokens != nil {
-		req.Options = map[string]interface{}{
-			"num_predict": int(*p.maxTokens),
-		}
+	req.Options = map[string]interface{}{
+		"num_predict": int(p.effectiveMaxTokens()),
 	}
 
 	var resp string
@@ -126,10 +124,8 @@ func (p *Ollama) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 		Prompt: prompt,
 		Stream: &b,
 	}
-	if p.maxTokens != nil {
-		req.Options = map[string]interface{}{
-			"num_predict": int(*p.maxTokens),
-		}
+	req.Options = map[string]interface{}{
+		"num_predict": int(p.effectiveMaxTokens()),
 	}
 
 	var resp string

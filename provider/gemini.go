@@ -80,9 +80,7 @@ func (p *Gemini) Analyze(msg imap.Message) (AnalysisResponse, error) {
 	if p.topP != nil {
 		cfg.TopP = p.topP
 	}
-	if p.maxTokens != nil {
-		cfg.MaxOutputTokens = *p.maxTokens
-	}
+	cfg.MaxOutputTokens = p.effectiveMaxTokens()
 
 	resp, err := p.client.Models.GenerateContent(
 		context.Background(),
@@ -137,9 +135,7 @@ func (p *Gemini) ConsolidateVars(vars ConsolidationPromptVars) (string, error) {
 	if p.topP != nil {
 		cfg.TopP = p.topP
 	}
-	if p.maxTokens != nil {
-		cfg.MaxOutputTokens = *p.maxTokens
-	}
+	cfg.MaxOutputTokens = p.effectiveMaxTokens()
 
 	resp, err := p.client.Models.GenerateContent(
 		context.Background(),

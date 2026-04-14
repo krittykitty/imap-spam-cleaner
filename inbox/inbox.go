@@ -843,15 +843,11 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 			}
 		}
 	}
-	// Debug: log provider output preview
+	// Log full consolidation result (no preview/truncation)
 	if summary == "" {
 		logx.Debugf("Consolidation result empty for %s; used fallback summary", inboxCfg.Username)
 	} else {
-		preview := summary
-		if len(preview) > 500 {
-			preview = preview[:500]
-		}
-		logx.Infof("Consolidation result for %s: %d bytes; preview: %s", inboxCfg.Username, len(summary), preview)
+		logx.Infof("Consolidation result for %s: %d bytes; summary: %s", inboxCfg.Username, len(summary), summary)
 	}
 
 	if err := recentStore.SaveConsolidation(summary); err != nil {

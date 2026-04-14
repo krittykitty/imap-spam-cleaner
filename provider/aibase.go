@@ -186,6 +186,13 @@ func (p *AIBase) ValidateConfig(config map[string]string) error {
 	return nil
 }
 
+func (p *AIBase) effectiveMaxTokens() int32 {
+	if p == nil || p.maxTokens == nil || *p.maxTokens < minMaxTokens {
+		return minMaxTokens
+	}
+	return *p.maxTokens
+}
+
 func (p *AIBase) formatHeaders(hdrs map[string]string) string {
 	if len(hdrs) == 0 {
 		return ""
