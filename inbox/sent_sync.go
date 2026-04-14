@@ -49,6 +49,7 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		logx.Warnf("Sent folder UIDVALIDITY changed for %s (%s): scanning full folder", inboxCfg.Username, inboxCfg.SentFolder)
 		cp = &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: 0}
 	}
+	logx.Debugf("Sent-folder sync checkpoint for %s: UIDValidity=%d LastUID=%d", inboxCfg.Username, cp.UIDValidity, cp.LastUID)
 
 	sinceUID := goimap.UID(cp.LastUID)
 	msgs, err := im.LoadHeaders(sinceUID)
@@ -74,9 +75,12 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		for email := range recipients {
 			contactList = append(contactList, email)
 		}
+		logx.Debugf("Saving %d sent recipients from %s to sent-folder whitelist storage", len(contactList), inboxCfg.SentFolder)
 		if err := st.BatchAddContacts(contactList, time.Now()); err != nil {
 			return fmt.Errorf("could not save sent contacts: %w", err)
 		}
+	} else {
+		logx.Infof("No new sent recipients found for %s in %s", inboxCfg.Username, inboxCfg.SentFolder)
 	}
 
 	if inboxCfg.SentFolderMaxAge > 0 {

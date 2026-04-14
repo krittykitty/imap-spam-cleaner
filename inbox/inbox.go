@@ -429,10 +429,11 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		}
 		if err := initialPopulation(appCtx, inboxCfg); err != nil {
 			logx.Errorf("Bootstrap: population failed for %s: %v", inboxCfg.Username, err)
-		}
-		if recentStore != nil {
+		} else if recentStore != nil {
 			if err := recentStore.MarkInitialPopulationDone(); err != nil {
 				logx.Errorf("Bootstrap: could not mark initial population done for %s: %v", inboxCfg.Username, err)
+			} else {
+				logx.Debugf("Bootstrap: marked initial population done for %s", inboxCfg.Username)
 			}
 			if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
 				logx.Errorf("Bootstrap: consolidation failed for %s: %v", inboxCfg.Username, err)
@@ -676,6 +677,7 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox) bool {
 		logx.Errorf("Could not read consolidation pending counter: %v", err)
 		return false
 	}
+	logx.Debugf("Consolidation trigger check for %s: pending=%d every=%d interval=%s", cfg.Username, pending, cfg.RecentConsolidationEvery, cfg.RecentConsolidationInterval)
 	if pending <= 0 {
 		// If there are no pending messages, still run consolidation when this
 		// inbox has stored recent messages but no consolidation summary yet.
@@ -685,8 +687,10 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox) bool {
 			return false
 		}
 		if summary == "" {
+			logx.Debugf("No consolidation summary exists for %s; scheduling an initial consolidation run", cfg.Username)
 			return true
 		}
+		logx.Debugf("No consolidation pending for %s and summary already exists", cfg.Username)
 		return false
 	}
 
@@ -720,6 +724,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 	if err != nil {
 		return err
 	}
+	logx.Infof("Consolidation starting for %s: %d recent messages, previous summary exists=%t", inboxCfg.Username, len(messages), prevConsolidation != "")
 	if len(messages) == 0 && prevConsolidation == "" {
 		logx.Debugf("Skipping consolidation for %s: no recent messages and no prior consolidation", inboxCfg.Username)
 		return nil
@@ -756,8 +761,8 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		})
 	}
 
-	// Debug: show what will be sent to the consolidation provider
-	logx.Debugf("Consolidation preparing for %s: messages=%d prevConsolidationLen=%d latestSenders=%s", inboxCfg.Username, len(tplMsgs), len(prevConsolidation), latestSenders)
+	// Show what will be sent to the consolidation provider
+	logx.Infof("Consolidation preparing for %s: messages=%d prevConsolidationLen=%d latestSenders=%s", inboxCfg.Username, len(tplMsgs), len(prevConsolidation), latestSenders)
 	for i, pm := range tplMsgs {
 		if i >= 3 {
 			break
