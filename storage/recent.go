@@ -252,7 +252,11 @@ func (s *RecentStore) GetConsolidatedContext(limit int, since time.Duration) (st
 		return "", err
 	}
 
-	messages, err := s.GetRecentMessages(limit, time.Now().UTC().Add(-since))
+	var cutoff time.Time
+	if since > 0 {
+		cutoff = time.Now().UTC().Add(-since)
+	}
+	messages, err := s.GetRecentMessages(limit, cutoff)
 	if err != nil {
 		return "", err
 	}

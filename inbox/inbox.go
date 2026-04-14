@@ -14,6 +14,7 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/imap"
 	"github.com/dominicgisler/imap-spam-cleaner/internal/dispatcher"
 	"github.com/dominicgisler/imap-spam-cleaner/logx"
+	"github.com/dominicgisler/imap-spam-cleaner/mailclean"
 	"github.com/dominicgisler/imap-spam-cleaner/provider"
 	"github.com/dominicgisler/imap-spam-cleaner/storage"
 	goimap "github.com/emersion/go-imap/v2"
@@ -114,6 +115,22 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 	}
 	defer recentStore.Close()
 
+	cleanSnippet := func(msg imap.Message) string {
+		snippet := strings.TrimSpace(msg.TextBody)
+		if snippet == "" && msg.HtmlBody != "" {
+			cleaned, err := mailclean.HTMLToSimpleMarkdown(strings.NewReader(msg.HtmlBody))
+			if err == nil {
+				snippet = cleaned
+			} else {
+				snippet = strings.TrimSpace(msg.HtmlBody)
+			}
+		}
+		if len(snippet) > 250 {
+			snippet = snippet[:250]
+		}
+		return strings.TrimSpace(snippet)
+	}
+
 	// helper to seed inbox messages: latest N messages, including snippet/html body.
 	seedFromMailbox := func(cfg app.Inbox, maxMessages int) ([]string, error) {
 		cfg.MinAge = 0
@@ -125,34 +142,29 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 		}
 		defer im.Close()
 
-		var sinceUID goimap.UID
+		var msgs []imap.Message
 		if maxMessages > 0 {
-			maxUID, err := im.GetMaxUID()
+			uids, err := im.GetLastUIDs(maxMessages)
 			if err != nil {
 				return nil, err
 			}
-			if maxUID > goimap.UID(maxMessages) {
-				sinceUID = maxUID - goimap.UID(maxMessages)
+			logx.Debugf("Initial population %s request latest %d UIDs, got %d UIDs", cfg.Inbox, maxMessages, len(uids))
+			msgs, err = im.LoadMessagesByUIDs(uids)
+			if err != nil {
+				return nil, err
 			}
-		}
-		msgs, err := im.LoadMessages(sinceUID)
-		if err != nil {
-			return nil, err
-		}
-
-		if maxMessages > 0 && len(msgs) > maxMessages {
-			msgs = msgs[len(msgs)-maxMessages:]
+			logx.Debugf("Initial population %s loaded %d messages by UID", cfg.Inbox, len(msgs))
+		} else {
+			msgs, err = im.LoadMessages(0)
+			if err != nil {
+				return nil, err
+			}
+			logx.Debugf("Initial population %s loaded %d messages from messages load", cfg.Inbox, len(msgs))
 		}
 
 		subjects := make([]string, 0, len(msgs))
 		for _, m := range msgs {
-			snippet := m.TextBody
-			if snippet == "" {
-				snippet = m.HtmlBody
-			}
-			if len(snippet) > 250 {
-				snippet = snippet[:250]
-			}
+			snippet := cleanSnippet(m)
 			var spamScore *float64
 			if m.SpamScoreValid {
 				spamScore = &m.SpamScore
@@ -538,7 +550,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		}
 
 		if recentStore != nil {
-			m.Context, err = recentStore.GetConsolidatedContext(10, 90*24*time.Hour)
+			m.Context, err = recentStore.GetConsolidatedContext(10, 0)
 			if err != nil {
 				logx.Errorf("Could not get consolidated context for %s: %v", inboxCfg.Username, err)
 			}
@@ -634,8 +646,9 @@ func shouldRunConsolidation(store *storage.RecentStore, cfg app.Inbox, processed
 }
 
 func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.RecentStore, p provider.Provider, prov app.Provider) error {
-	// Collect structured recent messages and previous consolidation
-	messages, err := recentStore.GetRecentMessages(50, time.Now().UTC().Add(-90*24*time.Hour))
+	// Collect structured recent messages and previous consolidation.
+	// Use the latest 50 inbox messages without a date cutoff for consolidation.
+	messages, err := recentStore.GetRecentMessages(50, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -754,7 +767,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		}
 	} else if consolidator, ok := pcons.(interface{ Consolidate(string) (string, error) }); ok {
 		// fallback to legacy string-based consolidation
-		contextStr, err := recentStore.GetConsolidatedContext(50, 90*24*time.Hour)
+		contextStr, err := recentStore.GetConsolidatedContext(50, 0)
 		if err != nil {
 			return err
 		}
@@ -767,7 +780,22 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 	}
 
 	if summary == "" {
-		return nil
+		if prevConsolidation != "" {
+			summary = prevConsolidation
+		} else {
+			// Ensure a first consolidation is always saved, even if provider output is empty.
+			summary = "Initial consolidation: recent activity summary.\n"
+			for i, msg := range messages {
+				if i >= 50 {
+					break
+				}
+				score := "n/a"
+				if msg.SpamScore != nil {
+					score = fmt.Sprintf("%.1f", *msg.SpamScore)
+				}
+				summary += fmt.Sprintf("- From: %s | Subject: %s | Score: %s\n", msg.From, msg.Subject, score)
+			}
+		}
 	}
 
 	return recentStore.SaveConsolidation(summary)
