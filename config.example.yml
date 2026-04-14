@@ -152,6 +152,7 @@ inboxes:                          # inboxes to be checked
     # sent_folder: Sent            # folder to scan for outgoing messages
     # sent_folder_maxage: 2160h    # how long sent contacts are retained (default 3 months)
     # sent_folder_schedule: "0 * * * *" # cron schedule for sent-folder sync
+    # force_initial_population: false # when true, rerun startup bootstrap (sent whitelist + latest 25 inbox seed + initial consolidation) once per process start
     recent_consolidation_every: 50 # run consolidation after this many processed messages
     recent_consolidation_interval: 336h # refresh consolidation if older than this interval (14 days)
     max_retries: 3                 # optional: max retry attempts for provider analysis (0 disables retries)

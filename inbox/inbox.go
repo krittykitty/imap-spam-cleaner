@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 )
 
 const initialPopulationWindow = 90 * 24 * time.Hour
+
+var forcedBootstrapDone sync.Map
 
 func Schedule(ctx app.Context) {
 
@@ -363,6 +366,27 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		defer recentStore.Close()
 	}
 
+	runInitialBootstrap := func(reason string) {
+		logx.Infof("Running initial bootstrap for %s (%s)", inboxCfg.Username, reason)
+		if inboxCfg.EnableSentWhitelist {
+			if err := syncSentFolder(appCtx, inboxCfg); err != nil {
+				logx.Errorf("Initial bootstrap: sent-folder sync failed for %s: %v", inboxCfg.Username, err)
+			}
+		}
+		if err := initialPopulation(appCtx, inboxCfg); err != nil {
+			logx.Errorf("Initial bootstrap: population failed for %s: %v", inboxCfg.Username, err)
+		}
+		if recentStore == nil {
+			logx.Errorf("Initial bootstrap: recent store unavailable for %s; consolidation skipped", inboxCfg.Username)
+			return
+		}
+		if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
+			logx.Errorf("Initial bootstrap: consolidation failed for %s: %v", inboxCfg.Username, err)
+		} else {
+			logx.Infof("Initial bootstrap: consolidation completed for %s", inboxCfg.Username)
+		}
+	}
+
 	snippetFromMessage := func(msg imap.Message, maxBytes int) string {
 		if msg.TextBody != "" {
 			if len(msg.TextBody) > maxBytes {
@@ -412,6 +436,16 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 
 	currentUIDValidity := im.GetUIDValidity()
 
+	if inboxCfg.ForceInitialPopulation {
+		bootstrapKey := fmt.Sprintf("%s|%s|%s", inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+		if _, alreadyDone := forcedBootstrapDone.LoadOrStore(bootstrapKey, struct{}{}); !alreadyDone {
+			runInitialBootstrap("forced by config")
+		} else {
+			logx.Debugf("Forced initial bootstrap already executed in this process for %s", inboxCfg.Username)
+		}
+		return
+	}
+
 	// First run: no checkpoint exists yet — establish the baseline UID.
 	if cp == nil {
 		logx.Infof("First run for %s: establishing checkpoint (no messages processed this run)", inboxCfg.Username)
@@ -426,15 +460,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint: %v\n", err)
 		} else {
-			// attempt to seed recent-message memory on first run; non-fatal
-			if err := initialPopulation(appCtx, inboxCfg); err != nil {
-				logx.Errorf("Initial population failed for %s: %v", inboxCfg.Username, err)
-			}
-			if recentStore != nil {
-				if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
-					logx.Errorf("Could not run initial consolidation for %s: %v", inboxCfg.Username, err)
-				}
-			}
+			runInitialBootstrap("first startup")
 		}
 		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d)", maxUID, currentUIDValidity)
 		return

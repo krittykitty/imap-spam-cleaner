@@ -65,6 +65,7 @@ type Inbox struct {
 	RecentConsolidationEvery    int           `yaml:"recent_consolidation_every" validate:"omitempty,min=1"`
 	RecentConsolidationInterval time.Duration `yaml:"recent_consolidation_interval" validate:"omitempty"`
 	ConsolidationProvider       string        `yaml:"consolidation_provider" validate:"omitempty"`
+	ForceInitialPopulation      bool          `yaml:"force_initial_population" validate:"omitempty"`
 	MaxRetries                  *int          `yaml:"max_retries" validate:"omitempty,min=0"`
 }
 
