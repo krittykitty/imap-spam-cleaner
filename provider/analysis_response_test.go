@@ -57,6 +57,26 @@ func TestParseAnalysisResponse(t *testing.T) {
 	}
 }
 
+func TestParseAnalysisResponse_EmptyPayloadIsRetryable(t *testing.T) {
+	_, err := parseAnalysisResponse("   \n\t")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if IsNonRetryable(err) {
+		t.Fatalf("expected retryable error for empty payload, got non-retryable: %v", err)
+	}
+}
+
+func TestParseAnalysisResponse_InvalidPayloadIsNonRetryable(t *testing.T) {
+	_, err := parseAnalysisResponse("not-json")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !IsNonRetryable(err) {
+		t.Fatalf("expected non-retryable error for invalid non-empty payload, got: %v", err)
+	}
+}
+
 func TestIsNonRetryable(t *testing.T) {
 	err := markNonRetryable(errors.New("deterministic failure"))
 	if !IsNonRetryable(err) {

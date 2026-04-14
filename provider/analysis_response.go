@@ -47,6 +47,12 @@ func parseAnalysisResponse(raw string) (AnalysisResponse, error) {
 	}
 
 	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		// Empty model responses can be transient transport/runtime issues and
+		// should remain retryable by the dispatcher.
+		return AnalysisResponse{}, errors.New("empty analysis response")
+	}
+
 	appendCandidate(trimmed)
 
 	unfenced := stripMarkdownCodeFence(trimmed)

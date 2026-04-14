@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -80,14 +81,25 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 		Model:  p.model,
 		Prompt: prompt,
 		Stream: &b,
+		Format: json.RawMessage(`"json"`),
 	}
 	req.Options = map[string]interface{}{
 		"num_predict": int(p.effectiveMaxTokens()),
 	}
 
 	var resp string
+	frames := 0
+	nonEmptyFrames := 0
+	lastDoneReason := ""
 	if err = p.client.Generate(context.Background(), &req, func(response api.GenerateResponse) error {
+		frames++
+		if response.Response != "" {
+			nonEmptyFrames++
+		}
 		resp += response.Response
+		if response.DoneReason != "" {
+			lastDoneReason = response.DoneReason
+		}
 		return nil
 	}); err != nil {
 		return AnalysisResponse{}, err
@@ -95,6 +107,11 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 
 	var res AnalysisResponse
 	body := strings.TrimSpace(resp)
+	if body == "" {
+		logx.Warnf("Ollama returned empty analysis body for message #%d (model=%s frames=%d nonEmptyFrames=%d doneReason=%q)", msg.UID, p.model, frames, nonEmptyFrames, lastDoneReason)
+	} else {
+		logx.Debugf("Ollama analysis response stats for message #%d (model=%s bytes=%d frames=%d nonEmptyFrames=%d doneReason=%q)", msg.UID, p.model, len(body), frames, nonEmptyFrames, lastDoneReason)
+	}
 	res, err = parseAnalysisResponse(body)
 	if err != nil {
 		return AnalysisResponse{}, err
