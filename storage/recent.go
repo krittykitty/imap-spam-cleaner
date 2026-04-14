@@ -106,6 +106,17 @@ func NewRecent(dbPath string) (*RecentStore, error) {
 		return nil, fmt.Errorf("failed to create consolidations table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at DATETIME NOT NULL
+        );
+    `); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create metadata table: %w", err)
+	}
+
 	return &RecentStore{db: db}, nil
 }
 
@@ -197,6 +208,33 @@ func (s *RecentStore) SaveConsolidation(summary string) error {
 		return fmt.Errorf("recent store is not initialized")
 	}
 	_, err := s.db.Exec(`INSERT INTO consolidations(summary, created_at) VALUES (?, ?)`, summary, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+func (s *RecentStore) IsInitialPopulationDone() (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("recent store is not initialized")
+	}
+	row := s.db.QueryRow(`SELECT value FROM metadata WHERE key = 'initial_population_done'`)
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return value == "true", nil
+}
+
+func (s *RecentStore) MarkInitialPopulationDone() error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("recent store is not initialized")
+	}
+	_, err := s.db.Exec(`
+        INSERT INTO metadata (key, value, updated_at)
+        VALUES ('initial_population_done', 'true', ?)
+        ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = ?;
+    `, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 

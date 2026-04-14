@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -23,8 +22,6 @@ import (
 )
 
 const initialPopulationWindow = 90 * 24 * time.Hour
-
-var forcedBootstrapDone sync.Map
 
 func Schedule(ctx app.Context) {
 
@@ -366,27 +363,6 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		defer recentStore.Close()
 	}
 
-	runInitialBootstrap := func(reason string) {
-		logx.Infof("Running initial bootstrap for %s (%s)", inboxCfg.Username, reason)
-		if inboxCfg.EnableSentWhitelist {
-			if err := syncSentFolder(appCtx, inboxCfg); err != nil {
-				logx.Errorf("Initial bootstrap: sent-folder sync failed for %s: %v", inboxCfg.Username, err)
-			}
-		}
-		if err := initialPopulation(appCtx, inboxCfg); err != nil {
-			logx.Errorf("Initial bootstrap: population failed for %s: %v", inboxCfg.Username, err)
-		}
-		if recentStore == nil {
-			logx.Errorf("Initial bootstrap: recent store unavailable for %s; consolidation skipped", inboxCfg.Username)
-			return
-		}
-		if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
-			logx.Errorf("Initial bootstrap: consolidation failed for %s: %v", inboxCfg.Username, err)
-		} else {
-			logx.Infof("Initial bootstrap: consolidation completed for %s", inboxCfg.Username)
-		}
-	}
-
 	snippetFromMessage := func(msg imap.Message, maxBytes int) string {
 		if msg.TextBody != "" {
 			if len(msg.TextBody) > maxBytes {
@@ -436,19 +412,43 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 
 	currentUIDValidity := im.GetUIDValidity()
 
-	if inboxCfg.ForceInitialPopulation {
-		bootstrapKey := fmt.Sprintf("%s|%s|%s", inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
-		if _, alreadyDone := forcedBootstrapDone.LoadOrStore(bootstrapKey, struct{}{}); !alreadyDone {
-			runInitialBootstrap("forced by config")
+	// Check if initial population has ever been done for this mailbox
+	initialPopDone := false
+	if recentStore != nil {
+		done, err := recentStore.IsInitialPopulationDone()
+		if err != nil {
+			logx.Errorf("Could not check initial population flag for %s: %v", inboxCfg.Username, err)
 		} else {
-			logx.Debugf("Forced initial bootstrap already executed in this process for %s", inboxCfg.Username)
+			initialPopDone = done
 		}
-		return
 	}
 
-	// First run: no checkpoint exists yet — establish the baseline UID.
+	// If initial population has not been done, do it now (regardless of checkpoint state)
+	if !initialPopDone {
+		logx.Infof("Initial population not yet completed for %s; running bootstrap now", inboxCfg.Username)
+		if inboxCfg.EnableSentWhitelist {
+			if err := syncSentFolder(appCtx, inboxCfg); err != nil {
+				logx.Errorf("Bootstrap: sent-folder sync failed for %s: %v", inboxCfg.Username, err)
+			}
+		}
+		if err := initialPopulation(appCtx, inboxCfg); err != nil {
+			logx.Errorf("Bootstrap: population failed for %s: %v", inboxCfg.Username, err)
+		}
+		if recentStore != nil {
+			if err := recentStore.MarkInitialPopulationDone(); err != nil {
+				logx.Errorf("Bootstrap: could not mark initial population done for %s: %v", inboxCfg.Username, err)
+			}
+			if err := runConsolidation(appCtx, inboxCfg, recentStore, nil, prov); err != nil {
+				logx.Errorf("Bootstrap: consolidation failed for %s: %v", inboxCfg.Username, err)
+			} else {
+				logx.Infof("Bootstrap: consolidation completed for %s", inboxCfg.Username)
+			}
+		}
+	}
+
+	// If no checkpoint exists, establish it for incremental processing
 	if cp == nil {
-		logx.Infof("First run for %s: establishing checkpoint (no messages processed this run)", inboxCfg.Username)
+		logx.Infof("Establishing checkpoint for %s (first incremental run)", inboxCfg.Username)
 		maxUID, err := im.GetMaxUID()
 		if err != nil {
 			logx.Errorf("Could not get max UID: %v\n", err)
@@ -459,10 +459,8 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			LastUID:     uint32(maxUID),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint: %v\n", err)
-		} else {
-			runInitialBootstrap("first startup")
 		}
-		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d)", maxUID, currentUIDValidity)
+		logx.Infof("Checkpoint initialised at UID %d (UIDValidity=%d); incremental processing will start on next run", maxUID, currentUIDValidity)
 		return
 	}
 
@@ -731,6 +729,19 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		})
 	}
 
+	// Debug: show what will be sent to the consolidation provider
+	logx.Debugf("Consolidation preparing for %s: messages=%d prevConsolidationLen=%d latestSenders=%s", inboxCfg.Username, len(tplMsgs), len(prevConsolidation), latestSenders)
+	for i, pm := range tplMsgs {
+		if i >= 3 {
+			break
+		}
+		preview := pm.Snippet
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		logx.Debugf("Consolidation preview #%d: From=%s Subject=%s Snippet=%s", i, pm.From, pm.Subject, preview)
+	}
+
 	consolidationProvider := prov
 	if inboxCfg.ConsolidationProvider != "" {
 		cp, ok := ctx.Config.Providers[inboxCfg.ConsolidationProvider]
@@ -783,6 +794,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 	if consolidator, ok := pcons.(interface {
 		ConsolidateVars(provider.ConsolidationPromptVars) (string, error)
 	}); ok {
+		logx.Debugf("Calling ConsolidateVars for %s: messages=%d previousConsolidationLen=%d", inboxCfg.Username, len(tplMsgs), len(prevConsolidation))
 		summary, err = consolidator.ConsolidateVars(provider.ConsolidationPromptVars{
 			Messages:              tplMsgs,
 			LatestSenders:         latestSenders,
@@ -797,6 +809,7 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 		if err != nil {
 			return err
 		}
+		logx.Debugf("Calling legacy Consolidate for %s: context length=%d bytes", inboxCfg.Username, len(contextStr))
 		summary, err = consolidator.Consolidate(contextStr)
 		if err != nil {
 			return err
@@ -823,6 +836,21 @@ func runConsolidation(ctx app.Context, inboxCfg app.Inbox, recentStore *storage.
 			}
 		}
 	}
+	// Debug: log provider output preview
+	if summary == "" {
+		logx.Debugf("Consolidation result empty for %s; used fallback summary", inboxCfg.Username)
+	} else {
+		preview := summary
+		if len(preview) > 500 {
+			preview = preview[:500]
+		}
+		logx.Debugf("Consolidation result for %s: %d bytes; preview: %s", inboxCfg.Username, len(summary), preview)
+	}
 
-	return recentStore.SaveConsolidation(summary)
+	if err := recentStore.SaveConsolidation(summary); err != nil {
+		logx.Errorf("Could not save consolidation for %s: %v", inboxCfg.Username, err)
+		return err
+	}
+	logx.Infof("Saved consolidation for %s (%d bytes)", inboxCfg.Username, len(summary))
+	return nil
 }

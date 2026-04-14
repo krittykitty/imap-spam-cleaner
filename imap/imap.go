@@ -177,8 +177,8 @@ func (i *Imap) LoadHeaders(sinceUID imap.UID) ([]Message, error) {
 			message.Date = msg.InternalDate
 		}
 
-		if i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge)) || i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge)) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d)", msg.UID)
+		if (i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge))) || (i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge))) {
+			logx.Debugf("skipping message because date is not in range (msg.UID=%d date=%s MinAge=%v MaxAge=%v)", msg.UID, message.Date.UTC().Format(time.RFC3339), i.cfg.MinAge, i.cfg.MaxAge)
 			continue
 		}
 
@@ -315,8 +315,8 @@ func (i *Imap) LoadMessages(sinceUID imap.UID) ([]Message, error) {
 			message.Date = msg.InternalDate
 		}
 
-		if i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge)) || i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge)) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d)", msg.UID)
+		if (i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge))) || (i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge))) {
+			logx.Debugf("skipping message because date is not in range (msg.UID=%d date=%s MinAge=%v MaxAge=%v)", msg.UID, message.Date.UTC().Format(time.RFC3339), i.cfg.MinAge, i.cfg.MaxAge)
 			continue
 		}
 
@@ -397,13 +397,10 @@ func (i *Imap) LoadMessagesByUIDs(uids []imap.UID) ([]Message, error) {
 	var p *mail.Part
 	var messages []Message
 
+	// Note: LoadMessagesByUIDs fetches specific UIDs without date filtering.
+	// Date filters (MinAge/MaxAge) are not applied here because we are loading
+	// explicitly requested UIDs, which should always be loaded regardless of date.
 	searchCrit := &imap.SearchCriteria{}
-	if i.cfg.MinAge > 0 {
-		searchCrit.Before = time.Now().Add(-i.cfg.MinAge)
-	}
-	if i.cfg.MaxAge > 0 {
-		searchCrit.Since = time.Now().Add(-i.cfg.MaxAge)
-	}
 
 	var uidSet imap.UIDSet
 	for _, uid := range uids {
@@ -484,10 +481,7 @@ func (i *Imap) LoadMessagesByUIDs(uids []imap.UID) ([]Message, error) {
 			message.Date = msg.InternalDate
 		}
 
-		if i.cfg.MinAge > 0 && message.Date.After(time.Now().Add(-i.cfg.MinAge)) || i.cfg.MaxAge > 0 && message.Date.Before(time.Now().Add(-i.cfg.MaxAge)) {
-			logx.Debugf("skipping message because date is not in range (msg.UID=%d)", msg.UID)
-			continue
-		}
+		// Note: No date filtering in LoadMessagesByUIDs; requested UIDs are always loaded.
 
 		for {
 			p, err = mr.NextPart()
