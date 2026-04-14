@@ -12,6 +12,10 @@ import (
 	goimap "github.com/emersion/go-imap/v2"
 )
 
+func shouldReseedSentWhitelist(cp *checkpoint.Checkpoint, contactCount int) bool {
+	return cp != nil && cp.LastUID > 0 && contactCount == 0
+}
+
 func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 	if !inboxCfg.EnableSentWhitelist {
 		return nil
@@ -35,6 +39,11 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		return fmt.Errorf("could not load sent-folder checkpoint: %w", err)
 	}
 
+	contactCountBefore, err := st.ContactCount()
+	if err != nil {
+		return fmt.Errorf("could not count sent contacts: %w", err)
+	}
+
 	im, err := imap.New(sentCfg)
 	if err != nil {
 		return fmt.Errorf("could not open sent folder %s: %w", inboxCfg.SentFolder, err)
@@ -47,6 +56,11 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		cp = &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: 0}
 	} else if cp.UIDValidity != currentUIDValidity {
 		logx.Warnf("Sent folder UIDVALIDITY changed for %s (%s): scanning full folder", inboxCfg.Username, inboxCfg.SentFolder)
+		cp = &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: 0}
+	} else if shouldReseedSentWhitelist(cp, contactCountBefore) {
+		// If checkpoint exists but the whitelist DB is empty (e.g. DB reset/migration),
+		// force a bounded re-seed from the configured sent-folder window.
+		logx.Warnf("Sent whitelist for %s is empty while checkpoint is at UID %d; rebuilding from last %s", inboxCfg.Username, cp.LastUID, inboxCfg.SentFolderMaxAge)
 		cp = &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: 0}
 	}
 	logx.Debugf("Sent-folder sync checkpoint for %s: UIDValidity=%d LastUID=%d", inboxCfg.Username, cp.UIDValidity, cp.LastUID)
@@ -104,7 +118,12 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		return fmt.Errorf("could not save sent-folder checkpoint: %w", err)
 	}
 
-	logx.Infof("Sent-folder sync complete for %s (%s); known contacts=%d", inboxCfg.Username, inboxCfg.SentFolder, len(recipients))
+	contactCountAfter, err := st.ContactCount()
+	if err != nil {
+		return fmt.Errorf("could not count sent contacts after sync: %w", err)
+	}
+
+	logx.Infof("Sent-folder sync complete for %s (%s); known contacts=%d (+%d this run)", inboxCfg.Username, inboxCfg.SentFolder, contactCountAfter, len(recipients))
 	return nil
 }
 

@@ -51,15 +51,24 @@ func main() {
 		dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
 		// Only create one storage per account (host+username). If already created,
 		// reuse it for additional inbox entries for the same account.
-		if _, ok := ctx.Storages[dbPath]; ok {
-			continue
+		if _, ok := ctx.Storages[dbPath]; !ok {
+			st, err := storage.New(dbPath)
+			if err != nil {
+				logx.Errorf("Could not open sent contacts storage for inbox %s: %v", inboxCfg.Username, err)
+				return
+			}
+			ctx.Storages[dbPath] = st
 		}
-		st, err := storage.New(dbPath)
-		if err != nil {
-			logx.Errorf("Could not open sent contacts storage for inbox %s: %v", inboxCfg.Username, err)
-			return
+
+		legacyDBPath := storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+		if legacyDBPath != dbPath {
+			imported, err := ctx.Storages[dbPath].MergeContactsFromFile(legacyDBPath)
+			if err != nil {
+				logx.Warnf("Could not migrate legacy sent contacts from %s for inbox %s: %v", legacyDBPath, inboxCfg.Username, err)
+			} else if imported > 0 {
+				logx.Infof("Migrated %d legacy sent contacts for %s from %s", imported, inboxCfg.Username, legacyDBPath)
+			}
 		}
-		ctx.Storages[dbPath] = st
 	}
 
 	defer func() {

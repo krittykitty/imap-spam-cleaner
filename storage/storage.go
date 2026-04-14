@@ -16,19 +16,19 @@ type Storage struct {
 	db *sql.DB
 }
 
-func DBPath(host, username, inbox string) string {
-	sanitize := func(s string) string {
-		return strings.Map(func(r rune) rune {
-			switch {
-			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
-				return r
-			default:
-				return '_'
-			}
-		}, s)
-	}
+func sanitizeFileName(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+}
 
-	filename := fmt.Sprintf("sent_contacts__%s__%s__%s.db", sanitize(host), sanitize(username), sanitize(inbox))
+func DBPath(host, username, inbox string) string {
+	filename := fmt.Sprintf("sent_contacts__%s__%s__%s.db", sanitizeFileName(host), sanitizeFileName(username), sanitizeFileName(inbox))
 	return filepath.Join("storage", filename)
 }
 
@@ -102,6 +102,19 @@ func (s *Storage) HasContact(email string) (bool, error) {
 	return true, nil
 }
 
+func (s *Storage) ContactCount() (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("storage is not initialized")
+	}
+
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM contacts`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Storage) BatchAddContacts(emails []string, seenAt time.Time) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("storage is not initialized")
@@ -156,6 +169,88 @@ func (s *Storage) PruneOlderThan(cutoff time.Time) error {
 	}
 	_, err := s.db.Exec(`DELETE FROM contacts WHERE last_seen_at < ?`, cutoff.UTC().Format(time.RFC3339))
 	return err
+}
+
+// MergeContactsFromFile imports contacts from a legacy SQLite DB into the
+// currently opened sent-contact storage. Existing contacts are merged by email.
+func (s *Storage) MergeContactsFromFile(sourcePath string) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("storage is not initialized")
+	}
+
+	if strings.TrimSpace(sourcePath) == "" {
+		return 0, nil
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	srcDB, err := sql.Open("sqlite", sourcePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open source sqlite database: %w", err)
+	}
+	defer srcDB.Close()
+
+	rows, err := srcDB.Query(`SELECT email, last_seen_at FROM contacts`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read contacts from source database: %w", err)
+	}
+	defer rows.Close()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	stmt, err := tx.Prepare(`
+        INSERT INTO contacts(email, last_seen_at)
+        VALUES (?, ?)
+        ON CONFLICT(email) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at)
+    `)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	imported := 0
+	for rows.Next() {
+		var email string
+		var lastSeen sql.NullString
+		if err := rows.Scan(&email, &lastSeen); err != nil {
+			return 0, err
+		}
+
+		normalized, err := normalizeEmail(email)
+		if err != nil || normalized == "" {
+			continue
+		}
+
+		seenAt := strings.TrimSpace(lastSeen.String)
+		if seenAt == "" {
+			seenAt = time.Now().UTC().Format(time.RFC3339)
+		}
+
+		if _, err := stmt.Exec(normalized, seenAt); err != nil {
+			return 0, err
+		}
+		imported++
+	}
+
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return imported, nil
 }
 
 func normalizeEmail(address string) (string, error) {
