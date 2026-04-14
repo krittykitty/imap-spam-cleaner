@@ -11,8 +11,7 @@ defaults:
     You are a cybersecurity analyst specializing in email fraud.
     Your goal is to detect spam, phishing, and spoofed senders.
   user_prompt: |
-    Analyze the following (truncated) email for its spam score. Don't sort out legit invoices, transactional or personal email, but sort out SPAM and pure advertizing emails.
-    Return a spam score between 0 and 100.
+    Analyze the following (truncated) email for its spam score. Don't sort out legit invoices, transactional or personal email, but sort out SPAM,  Direct-Response Marketing and Sales Pitches.
     Return your analysis as a JSON object with the following fields:
     {
       "score": <int 0-100>,
