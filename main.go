@@ -48,7 +48,12 @@ func main() {
 			continue
 		}
 
-		dbPath := storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+		dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
+		// Only create one storage per account (host+username). If already created,
+		// reuse it for additional inbox entries for the same account.
+		if _, ok := ctx.Storages[dbPath]; ok {
+			continue
+		}
 		st, err := storage.New(dbPath)
 		if err != nil {
 			logx.Errorf("Could not open sent contacts storage for inbox %s: %v", inboxCfg.Username, err)

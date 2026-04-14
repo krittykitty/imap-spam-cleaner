@@ -216,6 +216,12 @@ func initialPopulation(ctx app.Context, inboxCfg app.Inbox) error {
 			if to := strings.TrimSpace(m.To); to != "" {
 				recipients = append(recipients, to)
 			}
+			if cc := strings.TrimSpace(m.Cc); cc != "" {
+				recipients = append(recipients, cc)
+			}
+			if bcc := strings.TrimSpace(m.Bcc); bcc != "" {
+				recipients = append(recipients, bcc)
+			}
 		}
 		return recipients, nil
 	}
@@ -534,7 +540,7 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		}
 
 		if inboxCfg.EnableSentWhitelist {
-			dbPath := storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)
+			dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
 			if st, ok := appCtx.Storages[dbPath]; ok && st != nil {
 				known, err := st.HasContact(m.From)
 				if err != nil {

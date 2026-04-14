@@ -32,6 +32,13 @@ func DBPath(host, username, inbox string) string {
 	return filepath.Join("storage", filename)
 }
 
+// SentDBPath returns the sent-contacts DB path for a host/user (per-account)
+// This creates a single whitelist DB shared across inboxes for the same account.
+func SentDBPath(host, username string) string {
+	filename := fmt.Sprintf("sent_contacts__%s__%s.db", sanitizeFileName(host), sanitizeFileName(username))
+	return filepath.Join("storage", filename)
+}
+
 func New(dbPath string) (*Storage, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {

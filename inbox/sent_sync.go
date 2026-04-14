@@ -17,7 +17,7 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		return nil
 	}
 
-	st, ok := ctx.Storages[storage.DBPath(inboxCfg.Host, inboxCfg.Username, inboxCfg.Inbox)]
+	st, ok := ctx.Storages[storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)]
 	if !ok || st == nil {
 		return fmt.Errorf("sent-folder storage unavailable for inbox %s", inboxCfg.Username)
 	}
@@ -105,8 +105,15 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 }
 
 func extractRecipientEmails(message imap.Message) []string {
-	emails := make([]string, 0, 2)
+	emails := make([]string, 0, 4)
+	// include To, Cc and Bcc from sent messages as these are outgoing recipients
 	for _, email := range storage.ParseAddressList(message.To) {
+		emails = append(emails, email)
+	}
+	for _, email := range storage.ParseAddressList(message.Cc) {
+		emails = append(emails, email)
+	}
+	for _, email := range storage.ParseAddressList(message.Bcc) {
 		emails = append(emails, email)
 	}
 	return emails
