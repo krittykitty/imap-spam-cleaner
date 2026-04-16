@@ -12,12 +12,9 @@ import (
 	"github.com/dominicgisler/imap-spam-cleaner/mailclean"
 )
 
-// textBodyDivisor controls the plain-text share of the LLM prompt budget when
-// both text and HTML bodies are present: plain-text gets 1/textBodyDivisor of
-// maxsize; the rest goes to the HTML-derived Markdown, reflecting that spam
-// signals tend to be denser in the HTML part.
-const textBodyDivisor = 4
 const minMaxTokens = int32(500)
+const softCapNumerator = 12
+const softCapDenominator = 10
 
 const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
 
@@ -44,11 +41,8 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Text body:
-{{.TextBody}}
-
-HTML body (converted to Markdown):
-{{.HtmlBody}}
+Body (HTML converted to Markdown when available):
+{{.Body}}
 `
 
 type AnalysisResponse struct {
@@ -185,6 +179,21 @@ func (p *AIBase) formatHeaders(hdrs map[string]string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (p *AIBase) applySoftMaxsizeCap(body string, uid uint32, subject, kind string) string {
+	if len(body) <= p.maxsize {
+		return body
+	}
+
+	softCap := p.maxsize * softCapNumerator / softCapDenominator
+	if len(body) <= softCap {
+		logx.Debugf("keeping full %s body for message #%d (%s): size=%d within soft cap=%d", kind, uid, subject, len(body), softCap)
+		return body
+	}
+
+	logx.Debugf("truncating %s body for message #%d (%s): size=%d exceeds soft cap=%d", kind, uid, subject, len(body), softCap)
+	return body[:p.maxsize]
+}
+
 func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 
 	textBody := msg.TextBody
@@ -201,34 +210,23 @@ func (p *AIBase) buildUserPrompt(msg imap.Message) (string, error) {
 		}
 	}
 
-	// Apply size limits. When both bodies are present, allocate 1/4 of the
-	// budget to plain-text and 3/4 to the HTML-derived Markdown — spam
-	// signals tend to be denser in the HTML part.
-	if textBody != "" && htmlBody != "" {
-		textLimit := p.maxsize / textBodyDivisor
-		htmlLimit := p.maxsize - textLimit
-		if len(textBody) > textLimit {
-			textBody = textBody[:textLimit]
-			logx.Debugf("truncating text body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-		if len(htmlBody) > htmlLimit {
-			htmlBody = htmlBody[:htmlLimit]
-			logx.Debugf("truncating HTML body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-	} else {
-		if len(textBody) > p.maxsize {
-			textBody = textBody[:p.maxsize]
-			logx.Debugf("truncating text body for message #%d (%s)", msg.UID, msg.Subject)
-		}
-		if len(htmlBody) > p.maxsize {
-			htmlBody = htmlBody[:p.maxsize]
-			logx.Debugf("truncating HTML body for message #%d (%s)", msg.UID, msg.Subject)
-		}
+	// Use only one body for the prompt:
+	// - Prefer HTML (converted to Markdown) when available.
+	// - Otherwise use plain text.
+	body := textBody
+	bodyKind := "text"
+	if htmlBody != "" {
+		body = htmlBody
+		bodyKind = "HTML"
+		textBody = ""
 	}
 
-	body := htmlBody
-	if body == "" {
-		body = textBody
+	body = p.applySoftMaxsizeCap(body, uint32(msg.UID), msg.Subject, bodyKind)
+	if bodyKind == "HTML" {
+		htmlBody = body
+	} else {
+		textBody = body
+		htmlBody = ""
 	}
 
 	formattedHeaders := p.formatHeaders(msg.Headers)

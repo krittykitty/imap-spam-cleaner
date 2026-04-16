@@ -83,6 +83,7 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 						break
 					}
 				}
+				shortHref := shortenURLForPrompt(href)
 				var txtBuilder strings.Builder
 				var collectText func(*html.Node)
 				collectText = func(nn *html.Node) {
@@ -96,6 +97,9 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 				collectText(n)
 				linkText := strings.TrimSpace(txtBuilder.String())
 				linkText = strings.Join(strings.Fields(linkText), " ")
+				if isURLLike(linkText) {
+					linkText = shortenURLForPrompt(linkText)
+				}
 				needSpace := b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") && !strings.HasSuffix(b.String(), " ")
 				if href != "" {
 					if domain := extractDomain(href); domain != "" {
@@ -106,7 +110,7 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 					if needSpace {
 						b.WriteString(" ")
 					}
-					b.WriteString(href)
+					b.WriteString(shortHref)
 				} else if href != "" {
 					if needSpace {
 						b.WriteString(" ")
@@ -114,7 +118,7 @@ func HTMLToSimpleMarkdown(r io.Reader) (string, error) {
 					if isURLLike(linkText) && !domainMatches(linkText, href) {
 						b.WriteString("!! LINK MISMATCH !! ")
 					}
-					b.WriteString("[" + linkText + "](" + href + ")")
+					b.WriteString("[" + linkText + "](" + shortHref + ")")
 				} else {
 					inlineBuffer(linkText)
 				}
@@ -231,6 +235,44 @@ func extractDomain(raw string) string {
 	}
 	host := strings.ToLower(u.Hostname())
 	return strings.TrimSuffix(host, ".")
+}
+
+func shortenURLForPrompt(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	normalized := raw
+	if strings.HasPrefix(normalized, "//") {
+		normalized = "https:" + normalized
+	}
+	if !strings.Contains(normalized, "://") {
+		normalized = "https://" + normalized
+	}
+
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return raw
+	}
+
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "" {
+		return raw
+	}
+
+	short := host
+	if u.Path != "" && u.Path != "/" {
+		short += "/*"
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		if strings.HasSuffix(short, "/*") {
+			short += "=trackingstuff"
+		} else {
+			short += "/*=trackingstuff"
+		}
+	}
+	return short
 }
 
 func domainMatches(text, href string) bool {

@@ -27,7 +27,7 @@ func TestHTMLToSimpleMarkdown_Simple(t *testing.T) {
 	}
 
 	// Link should be formatted as Markdown
-	if !strings.Contains(out, "[claim your prize](https://example.com/buy)") {
+	if !strings.Contains(out, "[claim your prize](example.com/*)") {
 		t.Errorf("expected markdown link, got:\n%s", out)
 	}
 
@@ -109,8 +109,30 @@ func TestHTMLToSimpleMarkdown_LinkMismatchAndDomains(t *testing.T) {
 	if !strings.Contains(out, "!! LINK MISMATCH !!") {
 		t.Errorf("expected mismatch warning in output, got: %q", out)
 	}
-	if !strings.Contains(out, "[https://yourbank.com/login](http://phish-site.net/login)") {
+	if !strings.Contains(out, "[yourbank.com/*](phish-site.net/*)") {
 		t.Errorf("expected markdown link with href preserved, got: %q", out)
+	}
+}
+
+func TestShortenURLForPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "host only", raw: "https://example.com", want: "example.com"},
+		{name: "with path", raw: "https://example.com/path", want: "example.com/*"},
+		{name: "with query", raw: "https://example.com/path?utm=abc", want: "example.com/*=trackingstuff"},
+		{name: "with fragment", raw: "https://example.com/path#frag", want: "example.com/*=trackingstuff"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shortenURLForPrompt(tt.raw)
+			if got != tt.want {
+				t.Fatalf("shortenURLForPrompt(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
