@@ -31,7 +31,7 @@ providers:
       maxsize: 100000
       # temperature: 0.2
       # top_p: 0.95
-      # num_ctx: 3072
+      # num_ctx: 4096
       # max_tokens: 512
       user_prompt: |
         Analyze the following email for its spam score.

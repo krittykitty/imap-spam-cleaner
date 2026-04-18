@@ -56,7 +56,7 @@ providers:                        # providers to be used for inboxes
       maxsize: 100000             # message size limit for prompt (bytes)
       # temperature: 0.2          # optional: sampling temperature
       # top_p: 0.95               # optional: nucleus sampling probability
-      # num_ctx: 3072             # optional: Ollama context window (maps to options.num_ctx)
+      # num_ctx: 4096             # optional: Ollama context window (maps to options.num_ctx)
       # max_tokens: 512           # optional: max tokens in the response (maps to num_predict)
       # if num_ctx is not set here, env var OLLAMA_NUM_CTX is used when defined
       # consolidation_model: gpt-oss:7b       # optional: use a different model for consolidation
