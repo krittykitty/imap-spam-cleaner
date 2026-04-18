@@ -14,6 +14,7 @@ Configuration options:
 | `prompt`        | string  | no       | **Deprecated.** Legacy combined prompt; mapped to `user_prompt` for compatibility     |                          |
 | `temperature`   | float   | no       | Sampling temperature (0.0–2.0); lower = more deterministic                            | `0.2`                    |
 | `top_p`         | float   | no       | Nucleus sampling probability (0.0–1.0)                                                | `0.95`                   |
+| `num_ctx`       | integer | no       | Context window in tokens (maps to Ollama `options.num_ctx`; controls KV cache size)  | `3072`                   |
 | `max_tokens`    | integer | no       | Maximum tokens in the response (maps to `num_predict` in Ollama)                     | `512`                    |
 
 See [Providers](index.md) for available template variables and default prompt values.
@@ -30,6 +31,7 @@ providers:
       maxsize: 100000
       # temperature: 0.2
       # top_p: 0.95
+      # num_ctx: 3072
       # max_tokens: 512
       user_prompt: |
         Analyze the following email for its spam score.
@@ -58,6 +60,10 @@ providers:
         Email body:
         {{.Body}}
 ```
+
+    Environment variable fallback:
+
+    - `OLLAMA_NUM_CTX`: when `num_ctx` is not set in provider config, this env var is used.
 
 // Consolidation provider and prompt keys are archived. See `archive/` for legacy usage.
 
