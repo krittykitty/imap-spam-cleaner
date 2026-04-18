@@ -41,11 +41,11 @@ Recent messages:
 
 const defaultUserPrompt = `
 Analyze the following email for its spam potential.
-Return your analysis as a JSON object with the following fields:
+Return your analysis as a JSON object with the following fields (order for clarity):
 {
-  "score": <int 0-100>,
-  "reason": "<short explanation of why this score was given>",
-  "is_phishing": <bool>
+	"score": <int 0-100>,
+	"is_phishing": <bool>,
+	"reason": "<short explanation of why this score was given>"
 }
 Only return the JSON. No other text.
 

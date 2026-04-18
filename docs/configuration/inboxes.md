@@ -11,7 +11,7 @@
 | `provider`     | string   | yes      |         | Provider used for spam detection                                    | `prov1`           |
 | `inbox`        | string   | yes      |         | Folder to scan                                                      | `INBOX`           |
 | `spam`         | string   | yes      |         | Folder where spam messages are moved                                | `INBOX.Spam`      |
-| `minscore`     | integer  | yes      |         | Minimum spam score required to classify as spam (0–100)             | `75`              |
+| `minscore`     | integer  | yes      |         | Minimum spam score required to classify as spam (0–100). Messages are moved to spam if score ≥ minscore OR if the LLM sets `is_phishing` to `true`.             | `75`              |
 | `minage`       | duration | no       | `0h`    | Minimum age of message before scanning                              | `0h`              |
 | `maxage`       | duration | no       | `24h`   | Maximum age of message considered                                   | `24h`             |
 | `whitelist`             | string   | no       |         | Whitelist to use (empty/missing = no whitelist)                     | `whitelist1`      |

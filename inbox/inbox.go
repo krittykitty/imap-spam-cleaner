@@ -410,9 +410,11 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		m.SpamScoreValid = true
 		m.LLMReason = analysis.Reason
 		m.Whitelisted = false
-		logx.Infof("Spam score for message #%d: %d/100; From=%s; Subject=%s; Reason=%s", m.UID, analysis.Score, m.From, m.Subject, analysis.Reason)
+		logx.Infof("Spam score for message #%d: %d/100; Phishing=%t; From=%s; Subject=%s; Reason=%s", m.UID, analysis.Score, analysis.IsPhishing, m.From, m.Subject, analysis.Reason)
 
-		if analysis.Score >= inboxCfg.MinScore {
+		// Move to spam if the LLM marks it as phishing or if the spam score
+		// meets/exceeds the configured minimum.
+		if analysis.Score >= inboxCfg.MinScore || analysis.IsPhishing {
 			if appCtx.Options.AnalyzeOnly {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 			} else {

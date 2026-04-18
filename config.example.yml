@@ -100,6 +100,7 @@ inboxes:                          # inboxes to be checked
     inbox: INBOX                  # inbox folder
     spam: INBOX.Spam              # spam folder
     minscore: 75                  # min score to detect spam (0-100)
+                    # Messages are moved to spam if score >= minscore OR if the LLM marks is_phishing: true
     minage: 0h                    # min age of message
     maxage: 24h                   # max age of message
     # testfolder: imapspamcleaner # optional: dry-run LLM testing folder; checks up to 10 mails on startup, then new mails via IDLE (debug logs only, never moved)
