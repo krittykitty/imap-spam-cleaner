@@ -471,7 +471,27 @@ func processTestFolder(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider
 	currentUIDValidity := im.GetUIDValidity()
 	messages := make([]imap.Message, 0)
 
-	loadRecent := startup && cp == nil
+	// On startup always load recent messages for the test folder so that
+	// freshly copied mails are picked up for dry-run analysis. Also clear any
+	// processed UID markers to force re-analysis of messages that may have
+	// been copied or moved in without new UIDs.
+	loadRecent := startup
+	if startup {
+		if err := checkpoint.ClearProcessedMarkers(testCfg.Host, testCfg.Username, testCfg.Inbox); err != nil {
+			logx.Errorf("Test folder dry-run: could not clear processed uid markers for %s folder %s: %v", testCfg.Username, testCfg.Inbox, err)
+		} else {
+			logx.Infof("Test folder dry-run: cleared processed uid markers for %s folder %s", testCfg.Username, testCfg.Inbox)
+		}
+		// Reset the persisted checkpoint LastUID to 0 so incremental scans treat
+		// copied messages as new (only for the test folder on startup).
+		if cp != nil {
+			if err := checkpoint.Save(testCfg.Host, testCfg.Username, testCfg.Inbox, &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: 0}); err != nil {
+				logx.Errorf("Test folder dry-run: could not reset checkpoint for %s folder %s: %v", testCfg.Username, testCfg.Inbox, err)
+			} else {
+				logx.Infof("Test folder dry-run: reset checkpoint LastUID to 0 for %s folder %s", testCfg.Username, testCfg.Inbox)
+			}
+		}
+	}
 	if cp != nil && cp.UIDValidity != currentUIDValidity {
 		logx.Warnf("Test folder dry-run: UIDVALIDITY changed for %s folder %s (%d -> %d), reloading latest %d", testCfg.Username, testCfg.Inbox, cp.UIDValidity, currentUIDValidity, testFolderStartupLimit)
 		loadRecent = true
@@ -565,7 +585,7 @@ func processTestFolder(appCtx app.Context, inboxCfg app.Inbox, prov app.Provider
 			continue
 		}
 
-		logx.Debugf("Test folder dry-run result: user=%s folder=%s uid=%d score=%d phishing=%t reason=%s", testCfg.Username, testCfg.Inbox, m.UID, analysis.Score, analysis.IsPhishing, analysis.Reason)
+		logx.Infof("Test folder dry-run result: user=%s folder=%s uid=%d score=%d phishing=%t reason=%s", testCfg.Username, testCfg.Inbox, m.UID, analysis.Score, analysis.IsPhishing, analysis.Reason)
 	}
 
 	if err := checkpoint.Save(testCfg.Host, testCfg.Username, testCfg.Inbox, &checkpoint.Checkpoint{UIDValidity: currentUIDValidity, LastUID: maxSeenUID}); err != nil {

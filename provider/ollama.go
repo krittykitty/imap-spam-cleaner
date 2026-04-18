@@ -161,6 +161,6 @@ func (p *Ollama) Analyze(msg imap.Message) (AnalysisResponse, error) {
 		return AnalysisResponse{}, err
 	}
 
-	logx.Infof("Reasoning for message #%d: %s", msg.UID, res.Reason)
+	logx.Infof("Reasoning for message #%d: score=%d phishing=%t reason=%s", msg.UID, res.Score, res.IsPhishing, res.Reason)
 	return res, nil
 }

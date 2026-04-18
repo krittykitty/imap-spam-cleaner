@@ -86,6 +86,17 @@ func processedUIDPath(host, username, inbox string, uid uint32) string {
 	return filepath.Join(processedDirPath(host, username, inbox), strconv.FormatUint(uint64(uid), 10)+".uid")
 }
 
+// ClearProcessedMarkers removes any per-UID processed markers for the
+// specified mailbox. This is used by the test-folder dry-run on startup to
+// allow re-processing messages that may have been copied into the folder.
+func ClearProcessedMarkers(host, username, inbox string) error {
+	dir := processedDirPath(host, username, inbox)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil
+	}
+	return os.RemoveAll(dir)
+}
+
 // TryMarkUIDProcessed marks UID as processed exactly once.
 // It returns true when the UID was newly marked in this call, false when it was already marked before.
 func TryMarkUIDProcessed(host, username, inbox string, uid uint32) (bool, error) {
