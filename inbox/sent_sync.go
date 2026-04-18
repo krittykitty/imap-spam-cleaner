@@ -28,6 +28,19 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 
 	sentCfg := inboxCfg
 	sentCfg.Inbox = inboxCfg.SentFolder
+
+	// Prefer a stored mapping for the sent-folder mailbox if available.
+	dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
+
+	var stored string
+	if sst, ok := ctx.Storages[dbPath]; ok && sst != nil {
+		st = sst
+		if v, err := st.GetMailbox("sent"); err == nil && v != "" {
+			stored = v
+			sentCfg.Inbox = v
+			logx.Debugf("Using stored sent mailbox %q for %s", v, inboxCfg.Username)
+		}
+	}
 	sentCfg.MinAge = 0
 	sentCfg.MaxAge = inboxCfg.SentFolderMaxAge
 	if sentCfg.MaxAge == 0 {
@@ -46,7 +59,15 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 
 	im, err := imap.New(sentCfg)
 	if err != nil {
-		return fmt.Errorf("could not open sent folder %s: %w", inboxCfg.SentFolder, err)
+		// If we attempted a stored mapping and it failed, fall back to configured name.
+		if stored != "" {
+			logx.Warnf("Stored sent mailbox %q failed to open for %s: %v; falling back to configured %q", stored, inboxCfg.Username, err, inboxCfg.SentFolder)
+			sentCfg.Inbox = inboxCfg.SentFolder
+			im, err = imap.New(sentCfg)
+		}
+		if err != nil {
+			return fmt.Errorf("could not open sent folder %s: %w", inboxCfg.SentFolder, err)
+		}
 	}
 	defer im.Close()
 
@@ -116,6 +137,24 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		LastUID:     uint32(newestUID),
 	}); err != nil {
 		return fmt.Errorf("could not save sent-folder checkpoint: %w", err)
+	}
+
+	// Persist the successfully-used sent mailbox mapping if needed.
+	if st != nil {
+		// Determine the actual mailbox name as represented on the server
+		if actual, ok := im.FindMailbox(sentCfg.Inbox); ok {
+			if stored == "" || stored != actual {
+				if err := st.SetMailbox("sent", actual); err != nil {
+					logx.Errorf("Could not persist sent mailbox mapping for %s: %v", inboxCfg.Username, err)
+				} else {
+					if stored == "" {
+						logx.Infof("Persisted sent mailbox %q for %s", actual, inboxCfg.Username)
+					} else {
+						logx.Infof("Updated persisted sent mailbox for %s -> %q", inboxCfg.Username, actual)
+					}
+				}
+			}
+		}
 	}
 
 	contactCountAfter, err := st.ContactCount()

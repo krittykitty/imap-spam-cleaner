@@ -71,6 +71,16 @@ func New(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to create contacts table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT
+		);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create metadata table: %w", err)
+	}
+
 	return &Storage{db: db}, nil
 }
 
@@ -161,6 +171,35 @@ func (s *Storage) BatchAddContacts(emails []string, seenAt time.Time) error {
 		return err
 	}
 	return nil
+}
+
+// GetMailbox returns a persisted mailbox name for a given role (e.g. "spam", "sent").
+// Returns empty string and nil error when no mapping exists.
+func (s *Storage) GetMailbox(role string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("storage is not initialized")
+	}
+	row := s.db.QueryRow(`SELECT value FROM metadata WHERE key = ? LIMIT 1`, role)
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+// SetMailbox persists a mailbox name for a given role (e.g. "spam", "sent").
+func (s *Storage) SetMailbox(role, mailbox string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("storage is not initialized")
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO metadata(key, value) VALUES(?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, role, mailbox)
+	return err
 }
 
 func (s *Storage) PruneOlderThan(cutoff time.Time) error {

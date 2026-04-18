@@ -194,13 +194,41 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 	defer im.Close()
 
 	spamFolder := inboxCfg.Spam
-	if actual, ok := im.FindMailbox(inboxCfg.Spam); ok {
-		spamFolder = actual
-	} else if detected, ok := im.DetectSpamMailbox(); ok {
-		logx.Warnf("Configured spam mailbox %q not found among available mailboxes; auto-selecting detected spam mailbox %q", inboxCfg.Spam, detected)
-		spamFolder = detected
-	} else {
-		logx.Warnf("Configured spam mailbox %q not found among available mailboxes; message moves may fail", inboxCfg.Spam)
+
+	// Prefer a stored/spillover mapping for the spam mailbox if available.
+	dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
+	var st *storage.Storage
+	if sst, ok := appCtx.Storages[dbPath]; ok && sst != nil {
+		st = sst
+		if storedSpam, err := st.GetMailbox("spam"); err == nil && storedSpam != "" {
+			if actual, ok := im.FindMailbox(storedSpam); ok {
+				spamFolder = actual
+				logx.Debugf("Using stored spam mailbox %q for %s", actual, inboxCfg.Username)
+			} else {
+				logx.Debugf("Stored spam mailbox %q not found for %s", storedSpam, inboxCfg.Username)
+			}
+		}
+	}
+
+	// If no stored mapping or stored mapping not usable, fall back to configured/detected logic.
+	if spamFolder == inboxCfg.Spam {
+		if actual, ok := im.FindMailbox(inboxCfg.Spam); ok {
+			spamFolder = actual
+		} else if detected, ok := im.DetectSpamMailbox(); ok {
+			logx.Warnf("Configured spam mailbox %q not found among available mailboxes; auto-selecting detected spam mailbox %q", inboxCfg.Spam, detected)
+			spamFolder = detected
+			if st != nil {
+				if storedSpam, _ := st.GetMailbox("spam"); storedSpam != detected {
+					if err := st.SetMailbox("spam", detected); err != nil {
+						logx.Errorf("Could not persist detected spam mailbox for %s: %v", inboxCfg.Username, err)
+					} else {
+						logx.Infof("Persisted detected spam mailbox %q for %s", detected, inboxCfg.Username)
+					}
+				}
+			}
+		} else {
+			logx.Warnf("Configured spam mailbox %q not found among available mailboxes; message moves may fail", inboxCfg.Spam)
+		}
 	}
 
 	currentUIDValidity := im.GetUIDValidity()
