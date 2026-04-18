@@ -102,6 +102,7 @@ inboxes:                          # inboxes to be checked
     minscore: 75                  # min score to detect spam (0-100)
     minage: 0h                    # min age of message
     maxage: 24h                   # max age of message
+    # testfolder: imapspamcleaner # optional: dry-run LLM testing folder; checks up to 10 mails on startup, then new mails via IDLE (debug logs only, never moved)
     whitelist: whitelist1         # whitelist to use, empty/missing = no whitelist
     # enable_sent_whitelist: true  # enable sent-folder memory to auto-whitelist replies
     # sent_folder: Sent            # folder to scan for outgoing messages

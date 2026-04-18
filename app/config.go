@@ -48,6 +48,7 @@ type Inbox struct {
 	Password               string        `yaml:"password"     validate:"required"`
 	Provider               string        `yaml:"provider"     validate:"required"`
 	Inbox                  string        `yaml:"inbox"        validate:"required"`
+	TestFolder             string        `yaml:"testfolder"   validate:"omitempty"`
 	Spam                   string        `yaml:"spam"         validate:"required"`
 	MinScore               int           `yaml:"minscore"     validate:"required,gte=0,lte=100"`
 	MinAge                 time.Duration `yaml:"minage"       validate:"omitempty"`

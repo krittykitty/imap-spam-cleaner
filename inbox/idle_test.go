@@ -111,7 +111,7 @@ func TestRunIdleSessionDialError(t *testing.T) {
 	appCtx := app.Context{}
 	var mu sync.Mutex
 
-	err := runIdleSession(ctx, appCtx, inboxCfg, prov, 25*time.Minute, &mu, nil)
+	err := runIdleSession(ctx, appCtx, inboxCfg, prov, 25*time.Minute, &mu, nil, nil)
 	if err == nil {
 		t.Error("expected an error when dialling an unreachable server")
 	}

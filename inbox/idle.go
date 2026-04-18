@@ -40,13 +40,50 @@ func StartIdle(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov
 			return
 		}
 
-		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu, disp)
+		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu, disp, nil)
 		if ctx.Err() != nil {
 			logx.Infof("IDLE watcher stopping for %s", inboxCfg.Username)
 			return
 		}
 
 		logx.Errorf("IDLE session error for %s: %v; reconnecting in %s", inboxCfg.Username, err, backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff = minDuration(backoff*idleBackoffMul, idleBackoffMax)
+	}
+}
+
+// StartIdleTestFolder runs an IDLE watcher for a configured test folder and
+// triggers LLM dry-run analysis only (no message moves).
+func StartIdleTestFolder(ctx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, disp *dispatcher.Dispatcher) {
+	idleTimeout := inboxCfg.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = app.DefaultIdleTimeout
+	}
+
+	logx.Infof("IDLE test-folder watcher started for %s folder=%s (timeout=%s)", inboxCfg.Username, inboxCfg.Inbox, idleTimeout)
+
+	var mu sync.Mutex // prevents concurrent test-folder runs for this inbox
+
+	backoff := idleBackoffMin
+
+	for {
+		if ctx.Err() != nil {
+			logx.Infof("IDLE test-folder watcher stopping for %s folder=%s", inboxCfg.Username, inboxCfg.Inbox)
+			return
+		}
+
+		err := runIdleSession(ctx, appCtx, inboxCfg, prov, idleTimeout, &mu, disp, triggerTestFolderProcess)
+		if ctx.Err() != nil {
+			logx.Infof("IDLE test-folder watcher stopping for %s folder=%s", inboxCfg.Username, inboxCfg.Inbox)
+			return
+		}
+
+		logx.Errorf("IDLE test-folder session error for %s folder=%s: %v; reconnecting in %s", inboxCfg.Username, inboxCfg.Inbox, err, backoff)
 		select {
 		case <-ctx.Done():
 			return
@@ -69,7 +106,12 @@ func runIdleSession(
 	idleTimeout time.Duration,
 	mu *sync.Mutex,
 	disp *dispatcher.Dispatcher,
+	triggerFn func(context.Context, app.Context, app.Inbox, app.Provider, *sync.Mutex, *dispatcher.Dispatcher),
 ) error {
+	if triggerFn == nil {
+		triggerFn = triggerProcess
+	}
+
 	// Channel used by the unilateral-data handler to signal new mail.
 	newMail := make(chan struct{}, 1)
 
@@ -117,7 +159,7 @@ func runIdleSession(
 	logx.Debugf("IDLE session connected for %s", inboxCfg.Username)
 
 	// Catch-up: process any messages that arrived since the last checkpoint.
-	triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
+	triggerFn(ctx, appCtx, inboxCfg, prov, mu, disp)
 
 	for {
 		if ctx.Err() != nil {
@@ -157,7 +199,7 @@ func runIdleSession(
 
 		if triggered {
 			logx.Debugf("IDLE: new mail notification for %s", inboxCfg.Username)
-			triggerProcess(ctx, appCtx, inboxCfg, prov, mu, disp)
+			triggerFn(ctx, appCtx, inboxCfg, prov, mu, disp)
 		}
 	}
 }
@@ -176,6 +218,20 @@ func triggerProcess(runCtx context.Context, appCtx app.Context, inboxCfg app.Inb
 		} else {
 			processInboxInternal(appCtx, inboxCfg, prov, disp, runCtx)
 		}
+	}()
+}
+
+func triggerTestFolderProcess(runCtx context.Context, appCtx app.Context, inboxCfg app.Inbox, prov app.Provider, mu *sync.Mutex, disp *dispatcher.Dispatcher) {
+	go func() {
+		if !mu.TryLock() {
+			logx.Debugf("IDLE: test-folder processing already running for %s/%s, skipping trigger", inboxCfg.Username, inboxCfg.Inbox)
+			return
+		}
+		defer mu.Unlock()
+
+		baseCfg := inboxCfg
+		baseCfg.TestFolder = inboxCfg.Inbox
+		processTestFolder(appCtx, baseCfg, prov, disp, runCtx, false)
 	}()
 }
 
