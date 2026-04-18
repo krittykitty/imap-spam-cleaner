@@ -1,3 +1,31 @@
+defaults:
+  system_prompt: |
+    You are a cybersecurity analyst specializing in email fraud.
+    Your goal is to detect spam, phishing, and spoofed senderr.
+  user_prompt: |
+    Analyze the following (truncated) email for its spam score. Don't sort out legit invoices, transactional >
+    Reminder: Mails can have no (enforced) DKIM or SPF, and can still be valid. Valid DMARC only means: this >
+    Return a spam score between 0 spam and 100.
+    Return your analysis as a JSON object with the following fields:
+    {
+      "score": <int 0-100>,
+      "is_phishing": <bool>,
+      "reason": "<short explanation in max two sentences of why this score was given>"
+    }
+    Only return the JSON.
+
+    Headers:
+    {{.Headers}}
+
+    From: {{.From}}
+    To: {{.To}}
+    Delivered-To: {{.DeliveredTo}}
+    Cc: {{.Cc}}
+    Bcc: {{.Bcc}}
+    Subject: {{.Subject}}
+
+
+    This is my lates and working prompt version please just add it to the config as it is and as default.
 # Storage: per-inbox SQLite files are created under `./storage` by default.
 # Sent contacts DB:  storage/sent_contacts__<host>__<username>__<inbox>.db
 # Recent messages DB: storage/recent_messages__<host>__<username>__<inbox>.db
