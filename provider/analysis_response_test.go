@@ -83,3 +83,149 @@ func TestIsNonRetryable(t *testing.T) {
 		t.Fatalf("expected non-retryable marker")
 	}
 }
+
+// TestParseAnalysisResponse_BrokenJSON tests partial recovery from incomplete/broken JSON
+func TestParseAnalysisResponse_BrokenJSON(t *testing.T) {
+	tests := []struct {
+		name           string
+		raw            string
+		expectScore    int
+		expectReason   string
+		expectPhishing bool
+		shouldRecover  bool
+	}{
+		{
+			name:           "broken json with score and reason",
+			raw:            `Some text here {"score": 75, "reason": "suspicious links and attachments`,
+			expectScore:    75,
+			expectReason:   "suspicious links and attachments",
+			expectPhishing: false,
+			shouldRecover:  true,
+		},
+		{
+			name:           "broken json truncated mid-reason",
+			raw:            `{"score": 42, "reason": "This is a very long reason that got trun`,
+			expectScore:    42,
+			expectReason:   "This is a very long reason that got trun",
+			expectPhishing: false,
+			shouldRecover:  true,
+		},
+		{
+			name:           "broken json with escaped quotes in reason",
+			raw:            `{"score": 88, "reason": "Contains \"quoted\" text`,
+			expectScore:    88,
+			expectReason:   `Contains "quoted" text`,
+			expectPhishing: false,
+			shouldRecover:  true,
+		},
+		{
+			name:           "broken json with only score",
+			raw:            `{"score": 55, "reason":`,
+			expectScore:    55,
+			expectReason:   "",
+			expectPhishing: false,
+			shouldRecover:  true,
+		},
+		{
+			name:           "broken json with is_phishing true",
+			raw:            `{"score": 95, "reason": "phishing attempt", "is_phishing": true, "extra": "...`,
+			expectScore:    95,
+			expectReason:   "phishing attempt",
+			expectPhishing: true,
+			shouldRecover:  true,
+		},
+		{
+			name:           "text with partial json no score",
+			raw:            `Result: {"reason": "no score field", "is_phishing": false`,
+			expectScore:    0,
+			expectReason:   "",
+			expectPhishing: false,
+			shouldRecover:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := parseAnalysisResponse(tt.raw)
+
+			if tt.shouldRecover {
+				// Should successfully recover
+				if err != nil {
+					t.Fatalf("expected recovery but got error: %v", err)
+				}
+				if res.Score != tt.expectScore {
+					t.Errorf("expected score %d, got %d", tt.expectScore, res.Score)
+				}
+				if res.Reason != tt.expectReason {
+					t.Errorf("expected reason %q, got %q", tt.expectReason, res.Reason)
+				}
+				if res.IsPhishing != tt.expectPhishing {
+					t.Errorf("expected is_phishing %v, got %v", tt.expectPhishing, res.IsPhishing)
+				}
+			} else {
+				// Should fail (no Score found)
+				if err == nil {
+					t.Fatalf("expected error for unrecoverable JSON, got nil")
+				}
+				if !IsNonRetryable(err) {
+					t.Fatalf("expected non-retryable error, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractPartialAnalysisResponse tests the partial extraction function directly
+func TestExtractPartialAnalysisResponse(t *testing.T) {
+	tests := []struct {
+		name          string
+		raw           string
+		expectScore   int
+		expectReason  string
+		expectSuccess bool
+	}{
+		{
+			name:          "valid extraction with score and reason",
+			raw:           `{"score": 65, "reason": "spam indicators"`,
+			expectScore:   65,
+			expectReason:  "spam indicators",
+			expectSuccess: true,
+		},
+		{
+			name:          "score with various spacing",
+			raw:           `{ "score" : 44 , "reason": "test"`,
+			expectScore:   44,
+			expectReason:  "test",
+			expectSuccess: true,
+		},
+		{
+			name:          "no score field",
+			raw:           `{"reason": "test", "is_phishing": true`,
+			expectSuccess: false,
+		},
+		{
+			name:          "score not a number",
+			raw:           `{"score": "high", "reason": "bad format"`,
+			expectSuccess: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, success := extractPartialAnalysisResponse(tt.raw)
+
+			if success != tt.expectSuccess {
+				t.Errorf("expected success %v, got %v", tt.expectSuccess, success)
+			}
+
+			if tt.expectSuccess {
+				if res.Score != tt.expectScore {
+					t.Errorf("expected score %d, got %d", tt.expectScore, res.Score)
+				}
+				if res.Reason != tt.expectReason {
+					t.Errorf("expected reason %q, got %q", tt.expectReason, res.Reason)
+				}
+			}
+		})
+	}
+}
