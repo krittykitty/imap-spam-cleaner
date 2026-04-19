@@ -19,7 +19,7 @@ The legacy `prompt` key is still accepted for backward compatibility and maps to
 ### Default system prompt
 
 ```
-You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.
+You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, is_phishing, and is_spam. Only return the JSON object, no other text.
 ```
 
 ### Default user prompt
@@ -29,8 +29,9 @@ Analyze the following email for its spam potential.
 Return your analysis as a JSON object with the following fields:
 {
   "score": <int 0-100>,
-  "reason": "<short explanation of why this score was given>",
-  "is_phishing": <bool>
+  "is_phishing": <bool>,
+  "is_spam": <bool>,
+  "reason": "<short explanation of why this score was given>"
 }
 Only return the JSON. No other text.
 
@@ -44,11 +45,8 @@ Cc: {{.Cc}}
 Bcc: {{.Bcc}}
 Subject: {{.Subject}}
 
-Text body:
-{{.TextBody}}
-
-HTML body:
-{{.HtmlBody}}
+Body (HTML converted to Markdown when available):
+{{.Body}}
 ```
 
 // Default consolidation prompts and template variables are archived. See `archive/` for legacy usage.

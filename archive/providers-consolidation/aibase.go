@@ -21,7 +21,7 @@ import (
 const textBodyDivisor = 4
 const minMaxTokens = int32(500)
 
-const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, and is_phishing. Only return the JSON object, no other text.`
+const defaultSystemPrompt = `You are a spam classification assistant. Analyze emails objectively and return only a JSON object with the fields score, reason, is_phishing, and is_spam. Only return the JSON object, no other text.`
 
 const defaultConsolidationPrompt = `
 Use the previous consolidation and recent email metadata to create a new concise summary in five sentences.
@@ -45,6 +45,7 @@ Return your analysis as a JSON object with the following fields (order for clari
 {
 	"score": <int 0-100>,
 	"is_phishing": <bool>,
+	"is_spam": <bool>,
 	"reason": "<short explanation of why this score was given>"
 }
 Only return the JSON. No other text.
