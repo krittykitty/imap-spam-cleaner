@@ -1,0 +1,5 @@
+# import config
+packagefile github.com/dominicgisler/imap-spam-cleaner/provider=/home/kritty/jupyter/github/imap-spam-cleaner/tmpgo/go-build102971198/b529/_pkg_.a
+packagefile os=/home/kritty/.cache/go-build/5a/5a246b9127afff806a8e5390948a0a9e6c936ee6c728621dd483c2868abef61e-d
+packagefile testing=/home/kritty/.cache/go-build/69/696593f4c962837f3c36b0754f253285057c51a491177113f17a0110d1607aa7-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/app=/home/kritty/.cache/go-build/31/31db555d1295de26fecb56b0a3b9f7eb9d477599497abbc814ce181cc7b30024-d

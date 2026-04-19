@@ -1,0 +1,19 @@
+# import config
+packagefile context=/home/kritty/.cache/go-build/42/422b5ba0576757bd6f326ca726e393a5f281ff0669a9711327b2678721ae2998-d
+packagefile fmt=/home/kritty/.cache/go-build/c5/c5daebe09c437cabb39eeacd0221147b4918b6adcf25a5fef77617439095377b-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/app=/home/kritty/.cache/go-build/96/96f532af6fda600c047d79059f7f5a34528953da5c20374bc98efb67b933f340-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/checkpoint=/home/kritty/.cache/go-build/33/33cca5ae2941969cd56aa0b82d59081238c9ae28bbe8b7058acff1d82393c255-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/imap=/home/kritty/.cache/go-build/10/10ecf05f1a36d2155e9960393b69579c608896b31ff3be95ee7b31adb5b39f2a-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/internal/dispatcher=/home/kritty/jupyter/github/imap-spam-cleaner/tmpgo/go-build102971198/b251/_pkg_.a
+packagefile github.com/dominicgisler/imap-spam-cleaner/logx=/home/kritty/.cache/go-build/e6/e65d994426f9f265ff7db55fe406556607e0603c3e436be36f26c2ad24849492-d
+packagefile github.com/dominicgisler/imap-spam-cleaner/provider=/home/kritty/jupyter/github/imap-spam-cleaner/tmpgo/go-build102971198/b252/_pkg_.a
+packagefile github.com/dominicgisler/imap-spam-cleaner/storage=/home/kritty/.cache/go-build/58/5874a184613179a0ac13baba7b4dee1a1482362eb230d34dd508ec1b44e4afd5-d
+packagefile github.com/emersion/go-imap/v2=/home/kritty/.cache/go-build/a4/a482bf55b913b3edfeb3843b1bf641d84d06329a851ffe174c1ea232fbb771bf-d
+packagefile github.com/emersion/go-imap/v2/imapclient=/home/kritty/.cache/go-build/ef/ef39bab8bbeecd7f16935e3914c607daeff370d21f06a9123a8ca27ca126268e-d
+packagefile github.com/go-co-op/gocron/v2=/home/kritty/.cache/go-build/cf/cf946f92a3f4510b3379e8d538174be63b2f3d8a35315aacf04817b670b09707-d
+packagefile os=/home/kritty/.cache/go-build/5a/5a246b9127afff806a8e5390948a0a9e6c936ee6c728621dd483c2868abef61e-d
+packagefile os/signal=/home/kritty/.cache/go-build/a3/a311a345974e4c20597d471b816f3b20ae92a179a7bd35451ab1ddd3b2a6715b-d
+packagefile strings=/home/kritty/.cache/go-build/13/133da9c42ea8671832a39309f06de6beae22ca0d5591a77e251baa92bd75537a-d
+packagefile sync=/home/kritty/.cache/go-build/f0/f03d55bb64809b426c270ee96e7bd9bb5f08eefeab903e1dc89939b49639f7fa-d
+packagefile syscall=/home/kritty/.cache/go-build/e3/e3e8693c051a7f36783a4c7adad510f3e7f824b38f358084bcb4c05d69787f2d-d
+packagefile time=/home/kritty/.cache/go-build/25/25f038a2d9ac45691a5c6219ec32ef53ad466063322e8db648fe640024f47916-d
