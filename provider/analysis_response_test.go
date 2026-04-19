@@ -28,6 +28,11 @@ func TestParseAnalysisResponse(t *testing.T) {
 			expectScore: 45,
 		},
 		{
+			name:        "json with extra fields and is_spam",
+			raw:         `{"score": 30, "reason": "promo", "is_spam": true, "is_suspicious": true, "spam_score": 30}`,
+			expectScore: 30,
+		},
+		{
 			name:    "invalid payload",
 			raw:     "not-json",
 			wantErr: true,
@@ -132,6 +137,14 @@ func TestParseAnalysisResponse_BrokenJSON(t *testing.T) {
 			expectScore:    95,
 			expectReason:   "phishing attempt",
 			expectPhishing: true,
+			shouldRecover:  true,
+		},
+		{
+			name:           "broken json with is_spam true",
+			raw:            `{"score": 85, "reason": "clearly spammy", "is_spam": true, "extra": "...`,
+			expectScore:    85,
+			expectReason:   "clearly spammy",
+			expectPhishing: false,
 			shouldRecover:  true,
 		},
 		{

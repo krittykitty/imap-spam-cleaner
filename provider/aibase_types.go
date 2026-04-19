@@ -8,6 +8,7 @@ type AnalysisResponse struct {
 	Score      int    `json:"score"`
 	Reason     string `json:"reason"`
 	IsPhishing bool   `json:"is_phishing"`
+	IsSpam     bool   `json:"is_spam"`
 }
 
 type AIBase struct {

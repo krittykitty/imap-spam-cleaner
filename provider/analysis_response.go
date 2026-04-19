@@ -74,6 +74,32 @@ func parseAnalysisResponse(raw string) (AnalysisResponse, error) {
 		}
 	}
 
+	// Lenient fallback: try unmarshalling into a generic map and extract known fields.
+	for _, body := range candidates {
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(body), &m); err != nil {
+			continue
+		}
+		var res AnalysisResponse
+		if v, ok := getIntFromMap(m, "score", "spam_score"); ok {
+			res.Score = v
+		}
+		if s, ok := getStringFromMap(m, "reason", "message"); ok {
+			res.Reason = s
+		}
+		if b, ok := getBoolFromMap(m, "is_phishing", "isPhishing"); ok {
+			res.IsPhishing = b
+		}
+		if b, ok := getBoolFromMap(m, "is_spam", "isSpam", "is_sp"); ok {
+			res.IsSpam = b
+		}
+
+		// Accept lenient result if any known field was found
+		if res.Score != 0 || res.Reason != "" || res.IsPhishing || res.IsSpam {
+			return res, nil
+		}
+	}
+
 	// Try partial recovery: extract Score and Reason from broken JSON (e.g., LLM output cut off)
 	if partialRes, scoreFound := extractPartialAnalysisResponse(raw); scoreFound {
 		snippet := trimmed
@@ -113,6 +139,66 @@ func stripMarkdownCodeFence(value string) string {
 	}
 
 	return strings.TrimSpace(value)
+}
+
+// Helper extractors for lenient map-based parsing
+func getIntFromMap(m map[string]interface{}, keys ...string) (int, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			switch t := v.(type) {
+			case float64:
+				return int(t), true
+			case int:
+				return t, true
+			case int64:
+				return int(t), true
+			case string:
+				var i int
+				if _, err := fmt.Sscanf(t, "%d", &i); err == nil {
+					return i, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func getStringFromMap(m map[string]interface{}, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			switch t := v.(type) {
+			case string:
+				return t, true
+			}
+		}
+	}
+	return "", false
+}
+
+func getBoolFromMap(m map[string]interface{}, keys ...string) (bool, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			switch t := v.(type) {
+			case bool:
+				return t, true
+			case string:
+				if strings.EqualFold(t, "true") {
+					return true, true
+				}
+				if strings.EqualFold(t, "false") {
+					return false, true
+				}
+			case float64:
+				if t == 1 {
+					return true, true
+				}
+				if t == 0 {
+					return false, true
+				}
+			}
+		}
+	}
+	return false, false
 }
 
 func extractJSONObject(value string) string {
@@ -163,6 +249,13 @@ func extractPartialAnalysisResponse(raw string) (AnalysisResponse, bool) {
 	phishingMatches := phishingRegex.FindStringSubmatch(raw)
 	if len(phishingMatches) >= 2 {
 		res.IsPhishing = phishingMatches[1] == "true"
+	}
+
+	// Extract is_spam if present; defaults to false if not found
+	spamRegex := regexp.MustCompile(`"(?:is_spam|isSpam|is_sp)"\s*:\s*(true|false)`)
+	spamMatches := spamRegex.FindStringSubmatch(raw)
+	if len(spamMatches) >= 2 {
+		res.IsSpam = spamMatches[1] == "true"
 	}
 
 	return res, true
