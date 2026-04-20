@@ -81,6 +81,49 @@ func New(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to create metadata table: %w", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS feedback_whitelist (
+			inbox TEXT NOT NULL,
+			email TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			added_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL,
+			PRIMARY KEY (inbox, email)
+		);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create feedback_whitelist table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_feedback_whitelist_expires_at
+		ON feedback_whitelist (expires_at);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create feedback_whitelist index: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS spam_move_markers (
+			inbox TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			sender_email TEXT NOT NULL,
+			moved_at DATETIME NOT NULL,
+			PRIMARY KEY (inbox, message_id)
+		);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create spam_move_markers table: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_spam_move_markers_moved_at
+		ON spam_move_markers (moved_at);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create spam_move_markers index: %w", err)
+	}
+
 	return &Storage{db: db}, nil
 }
 
@@ -210,6 +253,190 @@ func (s *Storage) PruneOlderThan(cutoff time.Time) error {
 	return err
 }
 
+func (s *Storage) AddFeedbackWhitelist(inbox, email, reason string, ttl time.Duration) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("storage is not initialized")
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("feedback whitelist ttl must be greater than 0")
+	}
+
+	normalizedInbox, err := normalizeInboxScope(inbox)
+	if err != nil {
+		return err
+	}
+	normalizedEmail, err := normalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "user_feedback"
+	}
+
+	now := time.Now().UTC()
+	addedAt := now.Format(time.RFC3339)
+	expiresAt := now.Add(ttl).Format(time.RFC3339)
+
+	_, err = s.db.Exec(`
+		INSERT INTO feedback_whitelist(inbox, email, reason, added_at, expires_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(inbox, email) DO UPDATE SET
+			reason = excluded.reason,
+			added_at = excluded.added_at,
+			expires_at = MAX(feedback_whitelist.expires_at, excluded.expires_at)
+	`, normalizedInbox, normalizedEmail, reason, addedAt, expiresAt)
+	return err
+}
+
+func (s *Storage) HasFeedbackWhitelist(inbox, email string, now time.Time) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("storage is not initialized")
+	}
+
+	normalizedInbox, err := normalizeInboxScope(inbox)
+	if err != nil {
+		return false, err
+	}
+	normalizedEmail, err := normalizeEmail(email)
+	if err != nil {
+		return false, err
+	}
+
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	row := s.db.QueryRow(
+		`SELECT 1 FROM feedback_whitelist WHERE inbox = ? AND email = ? AND expires_at > ? LIMIT 1`,
+		normalizedInbox,
+		normalizedEmail,
+		now.UTC().Format(time.RFC3339),
+	)
+	var exists int
+	if err := row.Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Storage) PruneExpiredFeedbackWhitelist(now time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("storage is not initialized")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	res, err := s.db.Exec(`DELETE FROM feedback_whitelist WHERE expires_at <= ?`, now.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Storage) AddSpamMoveMarker(inbox, messageID, senderEmail string, movedAt time.Time) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("storage is not initialized")
+	}
+
+	normalizedInbox, err := normalizeInboxScope(inbox)
+	if err != nil {
+		return err
+	}
+	normalizedMessageID, err := normalizeMessageID(messageID)
+	if err != nil {
+		return err
+	}
+	normalizedSender, err := normalizeEmail(senderEmail)
+	if err != nil {
+		return err
+	}
+	if movedAt.IsZero() {
+		movedAt = time.Now().UTC()
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO spam_move_markers(inbox, message_id, sender_email, moved_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(inbox, message_id) DO UPDATE SET
+			sender_email = excluded.sender_email,
+			moved_at = excluded.moved_at
+	`, normalizedInbox, normalizedMessageID, normalizedSender, movedAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (s *Storage) ConsumeSpamMoveMarker(inbox, messageID string) (string, bool, error) {
+	if s == nil || s.db == nil {
+		return "", false, fmt.Errorf("storage is not initialized")
+	}
+
+	normalizedInbox, err := normalizeInboxScope(inbox)
+	if err != nil {
+		return "", false, err
+	}
+	normalizedMessageID, err := normalizeMessageID(messageID)
+	if err != nil {
+		return "", false, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var sender string
+	err = tx.QueryRow(
+		`SELECT sender_email FROM spam_move_markers WHERE inbox = ? AND message_id = ? LIMIT 1`,
+		normalizedInbox,
+		normalizedMessageID,
+	).Scan(&sender)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM spam_move_markers WHERE inbox = ? AND message_id = ?`, normalizedInbox, normalizedMessageID); err != nil {
+		return "", false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+
+	return sender, true, nil
+}
+
+func (s *Storage) PruneSpamMoveMarkersOlderThan(cutoff time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("storage is not initialized")
+	}
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("prune cutoff must be set")
+	}
+
+	res, err := s.db.Exec(`DELETE FROM spam_move_markers WHERE moved_at < ?`, cutoff.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // MergeContactsFromFile imports contacts from a legacy SQLite DB into the
 // currently opened sent-contact storage. Existing contacts are merged by email.
 func (s *Storage) MergeContactsFromFile(sourcePath string) (int, error) {
@@ -307,6 +534,23 @@ func normalizeEmail(address string) (string, error) {
 		return "", err
 	}
 	return strings.ToLower(strings.TrimSpace(parsed.Address)), nil
+}
+
+func normalizeInboxScope(inbox string) (string, error) {
+	inbox = strings.ToLower(strings.TrimSpace(inbox))
+	if inbox == "" {
+		return "", fmt.Errorf("empty inbox scope")
+	}
+	return inbox, nil
+}
+
+func normalizeMessageID(messageID string) (string, error) {
+	messageID = strings.ToLower(strings.TrimSpace(messageID))
+	messageID = strings.Trim(messageID, "<>")
+	if messageID == "" {
+		return "", fmt.Errorf("empty message id")
+	}
+	return messageID, nil
 }
 
 func ParseAddressList(value string) []string {

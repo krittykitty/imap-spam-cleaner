@@ -44,17 +44,13 @@ func main() {
 	}
 
 	for _, inboxCfg := range c.Inboxes {
-		if !inboxCfg.EnableSentWhitelist {
-			continue
-		}
-
 		dbPath := storage.SentDBPath(inboxCfg.Host, inboxCfg.Username)
-		// Only create one storage per account (host+username). If already created,
-		// reuse it for additional inbox entries for the same account.
+		// Create one shared storage per account (host+username). This stores
+		// sent-contact memory, mailbox mappings, and user feedback whitelist state.
 		if _, ok := ctx.Storages[dbPath]; !ok {
 			st, err := storage.New(dbPath)
 			if err != nil {
-				logx.Errorf("Could not open sent contacts storage for inbox %s: %v", inboxCfg.Username, err)
+				logx.Errorf("Could not open account storage for inbox %s: %v", inboxCfg.Username, err)
 				return
 			}
 			ctx.Storages[dbPath] = st

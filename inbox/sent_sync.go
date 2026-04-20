@@ -124,6 +124,18 @@ func syncSentFolder(ctx app.Context, inboxCfg app.Inbox) error {
 		}
 	}
 
+	if pruned, err := st.PruneExpiredFeedbackWhitelist(time.Now()); err != nil {
+		return fmt.Errorf("could not prune feedback whitelist entries: %w", err)
+	} else if pruned > 0 {
+		logx.Debugf("Pruned %d expired feedback whitelist entries for %s", pruned, inboxCfg.Username)
+	}
+
+	if pruned, err := st.PruneSpamMoveMarkersOlderThan(time.Now().Add(-spamMoveMarkerMaxAge)); err != nil {
+		return fmt.Errorf("could not prune spam move markers: %w", err)
+	} else if pruned > 0 {
+		logx.Debugf("Pruned %d stale spam move markers for %s", pruned, inboxCfg.Username)
+	}
+
 	if len(msgs) == 0 {
 		maxUID, err := im.GetMaxUID()
 		if err != nil {

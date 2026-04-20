@@ -150,6 +150,20 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 	}
 
 	providerInitialized := false
+	now := time.Now().UTC()
+	if st != nil {
+		if pruned, err := st.PruneExpiredFeedbackWhitelist(now); err != nil {
+			logx.Errorf("Could not prune expired feedback whitelist entries for %s: %v", inboxCfg.Username, err)
+		} else if pruned > 0 {
+			logx.Debugf("Pruned %d expired feedback whitelist entries for %s", pruned, inboxCfg.Username)
+		}
+
+		if pruned, err := st.PruneSpamMoveMarkersOlderThan(now.Add(-spamMoveMarkerMaxAge)); err != nil {
+			logx.Errorf("Could not prune stale spam move markers for %s: %v", inboxCfg.Username, err)
+		} else if pruned > 0 {
+			logx.Debugf("Pruned %d stale spam move markers for %s", pruned, inboxCfg.Username)
+		}
+	}
 
 	moved := 0
 	processedUIDs := make([]uint32, 0, len(msgs))
@@ -183,6 +197,50 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 			LastUID:     mgr.LastUID(),
 		}); err != nil {
 			logx.Errorf("Could not save checkpoint for UID %d: %v\n", m.UID, err)
+		}
+
+		senderEmail := firstSenderEmail(m.From)
+
+		if st != nil {
+			messageID := messageIDForTracking(m.Headers)
+			if messageID != "" {
+				storedSender, movedBack, err := st.ConsumeSpamMoveMarker(inboxCfg.Inbox, messageID)
+				if err != nil {
+					logx.Errorf("Could not read spam move marker for message #%d (%s): %v", m.UID, m.Subject, err)
+				} else if movedBack {
+					if senderEmail == "" {
+						senderEmail = storedSender
+					}
+					if senderEmail != "" {
+						if err := st.AddFeedbackWhitelist(inboxCfg.Inbox, senderEmail, "moved_back_from_spam", feedbackWhitelistTTL); err != nil {
+							logx.Errorf("Could not add sender %s to feedback whitelist for %s: %v", senderEmail, inboxCfg.Username, err)
+						} else {
+							logx.Infof("Added sender %s to feedback whitelist for %s after spam-to-inbox correction", senderEmail, inboxCfg.Username)
+						}
+					}
+
+					m.Whitelisted = true
+					m.LLMReason = "whitelisted by spam-to-inbox user correction"
+					logx.Debugf("Skipping message #%d (%s) after detected spam-to-inbox correction (message-id=%s)", m.UID, m.Subject, messageID)
+					skippedUIDs = append(skippedUIDs, uint32(m.UID))
+					skippedReasons[uint32(m.UID)] = "whitelisted by spam-to-inbox user correction"
+					continue
+				}
+			}
+
+			if senderEmail != "" {
+				known, err := st.HasFeedbackWhitelist(inboxCfg.Inbox, senderEmail, now)
+				if err != nil {
+					logx.Errorf("Could not check feedback whitelist for sender %s: %v", senderEmail, err)
+				} else if known {
+					m.Whitelisted = true
+					m.LLMReason = "whitelisted by user feedback"
+					logx.Debugf("Skipping message #%d (%s) because sender %s is in feedback whitelist", m.UID, m.Subject, senderEmail)
+					skippedUIDs = append(skippedUIDs, uint32(m.UID))
+					skippedReasons[uint32(m.UID)] = "whitelisted by user feedback"
+					continue
+				}
+			}
 		}
 
 		if wl, ok := appCtx.Config.Whitelists[inboxCfg.Whitelist]; ok {
@@ -256,6 +314,13 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 		m.LLMReason = analysis.Reason
 		m.Whitelisted = false
 		logx.Infof("Spam score for message #%d: %d/100; Phishing=%t; IsSpam=%t; From=%s; Subject=%s; Reason=%s", m.UID, analysis.Score, analysis.IsPhishing, analysis.IsSpam, m.From, m.Subject, analysis.Reason)
+		if st != nil && senderEmail != "" && shouldAutoWhitelistNonSpam(analysis, inboxCfg.MinScore) {
+			if err := st.AddFeedbackWhitelist(inboxCfg.Inbox, senderEmail, "auto_non_spam", feedbackWhitelistTTL); err != nil {
+				logx.Errorf("Could not add sender %s to feedback whitelist for %s: %v", senderEmail, inboxCfg.Username, err)
+			} else {
+				logx.Debugf("Auto-added sender %s to feedback whitelist for %s after non-spam classification", senderEmail, inboxCfg.Username)
+			}
+		}
 
 		// Move to spam if the LLM marks it as phishing or if the spam score
 		// meets/exceeds the configured minimum.
@@ -268,6 +333,14 @@ func processInboxInternal(appCtx app.Context, inboxCfg app.Inbox, prov app.Provi
 					logx.Infof("Continuing after failed move for UID %d (marked processed, will not retry)", m.UID)
 					processedUIDs = append(processedUIDs, uint32(m.UID))
 					continue
+				}
+				if st != nil && senderEmail != "" {
+					messageID := messageIDForTracking(m.Headers)
+					if messageID != "" {
+						if err := st.AddSpamMoveMarker(inboxCfg.Inbox, messageID, senderEmail, time.Now()); err != nil {
+							logx.Errorf("Could not persist spam move marker for message #%d (%s): %v", m.UID, m.Subject, err)
+						}
+					}
 				}
 				moved++
 			}

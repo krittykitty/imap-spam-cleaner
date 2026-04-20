@@ -129,3 +129,119 @@ func TestStorageMergeContactsFromFile(t *testing.T) {
 		t.Fatalf("expected 3 contacts after merge, got %d", count)
 	}
 }
+
+func TestFeedbackWhitelistTTLAndScope(t *testing.T) {
+	dir := filepath.Join("testdata", "storage", "feedback")
+	os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+
+	st, err := New(filepath.Join(dir, "feedback.db"))
+	if err != nil {
+		t.Fatalf("New storage failed: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.AddFeedbackWhitelist("Inbox", "Alice <alice@example.com>", "moved_back_from_spam", 24*time.Hour); err != nil {
+		t.Fatalf("AddFeedbackWhitelist failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	has, err := st.HasFeedbackWhitelist("INBOX", "alice@example.com", now)
+	if err != nil {
+		t.Fatalf("HasFeedbackWhitelist failed: %v", err)
+	}
+	if !has {
+		t.Fatal("expected sender to be whitelisted in same inbox scope")
+	}
+
+	has, err = st.HasFeedbackWhitelist("OtherInbox", "alice@example.com", now)
+	if err != nil {
+		t.Fatalf("HasFeedbackWhitelist failed: %v", err)
+	}
+	if has {
+		t.Fatal("expected sender to be missing in different inbox scope")
+	}
+
+	has, err = st.HasFeedbackWhitelist("Inbox", "alice@example.com", now.Add(25*time.Hour))
+	if err != nil {
+		t.Fatalf("HasFeedbackWhitelist after expiry failed: %v", err)
+	}
+	if has {
+		t.Fatal("expected sender to expire from feedback whitelist")
+	}
+
+	pruned, err := st.PruneExpiredFeedbackWhitelist(now.Add(25 * time.Hour))
+	if err != nil {
+		t.Fatalf("PruneExpiredFeedbackWhitelist failed: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("expected 1 pruned feedback entry, got %d", pruned)
+	}
+}
+
+func TestSpamMoveMarkerConsumeAndPrune(t *testing.T) {
+	dir := filepath.Join("testdata", "storage", "spam_move_markers")
+	os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+
+	st, err := New(filepath.Join(dir, "markers.db"))
+	if err != nil {
+		t.Fatalf("New storage failed: %v", err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	if err := st.AddSpamMoveMarker("Inbox", "<msg-1@example.com>", "Alice <alice@example.com>", now); err != nil {
+		t.Fatalf("AddSpamMoveMarker failed: %v", err)
+	}
+
+	sender, found, err := st.ConsumeSpamMoveMarker("INBOX", "msg-1@example.com")
+	if err != nil {
+		t.Fatalf("ConsumeSpamMoveMarker failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected spam move marker to be found")
+	}
+	if sender != "alice@example.com" {
+		t.Fatalf("unexpected sender from marker: got %q", sender)
+	}
+
+	_, found, err = st.ConsumeSpamMoveMarker("Inbox", "msg-1@example.com")
+	if err != nil {
+		t.Fatalf("ConsumeSpamMoveMarker second read failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected marker to be deleted after consume")
+	}
+
+	if err := st.AddSpamMoveMarker("Inbox", "msg-old@example.com", "old@example.com", now.Add(-200*24*time.Hour)); err != nil {
+		t.Fatalf("AddSpamMoveMarker old failed: %v", err)
+	}
+	if err := st.AddSpamMoveMarker("Inbox", "msg-new@example.com", "new@example.com", now); err != nil {
+		t.Fatalf("AddSpamMoveMarker new failed: %v", err)
+	}
+
+	pruned, err := st.PruneSpamMoveMarkersOlderThan(now.Add(-180 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("PruneSpamMoveMarkersOlderThan failed: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("expected 1 pruned marker, got %d", pruned)
+	}
+
+	_, found, err = st.ConsumeSpamMoveMarker("Inbox", "msg-old@example.com")
+	if err != nil {
+		t.Fatalf("ConsumeSpamMoveMarker old failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected old marker to be pruned")
+	}
+
+	_, found, err = st.ConsumeSpamMoveMarker("Inbox", "msg-new@example.com")
+	if err != nil {
+		t.Fatalf("ConsumeSpamMoveMarker new failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected new marker to remain after pruning")
+	}
+}
