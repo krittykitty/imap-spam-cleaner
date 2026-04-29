@@ -1,3 +1,6 @@
 /.idea/
 /site/
 config.yml
+
+# local Go temporary build cache used by CI and local agent runs
+/.tmp/
